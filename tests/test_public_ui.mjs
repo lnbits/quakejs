@@ -44,4 +44,44 @@ test('closure hides an existing invoice and rejects a delayed invoice response',
   assert.equal(element('overlay').hidden, false)
   assert.match(element('status').textContent, /arena has been closed/)
   assert.equal(element('invoice-text').value, 'first-invoice')
+  vm.runInContext(`
+    let disconnected = false, reloaded = false
+    arena.transport = {close() { disconnected = true }}
+    window.location = {reload() { reloaded = true }}
+    applyState({game: arena.game, player: null})
+  `, context)
+  assert.equal(vm.runInContext('disconnected && reloaded', context), true)
+})
+
+test('closure between page load and initial state prevents assets and sockets starting', async () => {
+  const elements = new Map()
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, {hidden: false, addEventListener() {}, requestPointerLock() {}})
+    return elements.get(id)
+  }
+  let assetsStarted = false, socketStarted = false
+  const context = vm.createContext({
+    URL, clearTimeout, clearInterval, setTimeout,
+    window: {
+      location: {pathname: '/quakejs/games/' + 'a'.repeat(48)},
+      createLNbitsExtensionClient: () => ({
+        getSessionValue: async () => ({value: 'stored-token'}),
+        getPublicGame: async () => ({game: {status: 'closed', name: 'Closed', joinAmount: 100, haircut: 5}, player: null})
+      }),
+      addEventListener() {},
+      QuakeAssets: {load() { assetsStarted = true }},
+      QuakeTransport: class { constructor() { socketStarted = true } }
+    },
+    document: {
+      getElementById: element,
+      querySelector: () => ({src: 'https://example.com/quakejs/static/arena/engine.js'}),
+      addEventListener() {}
+    }
+  })
+  vm.runInContext(handlers, context)
+  await vm.runInContext('init()', context)
+  assert.equal(assetsStarted, false)
+  assert.equal(socketStarted, false)
+  assert.equal(element('progress').hidden, true)
+  assert.equal(element('loading').textContent, 'Arena closed')
 })

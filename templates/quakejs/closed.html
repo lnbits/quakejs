@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Arena closed · QuakeJS</title>
+    <link rel="stylesheet" href="/quakejs/static/arena.css" />
+  </head>
+  <body>
+    <main id="viewport">
+      <div id="overlay">
+        <section class="panel">
+          <div class="eyebrow">QUAKEJS · {{ name }}</div>
+          <h1>This arena has closed.</h1>
+          <p>Contact the arena owner about unused lives or payments.</p>
+          {% if lobby_url %}
+          <p><a id="create-new-game" href="{{ lobby_url }}">Go to lobby/create new game</a></p>
+          {% endif %}
+        </section>
+      </div>
+      <footer id="powered-by">POWERED BY LNBITS</footer>
+    </main>
+  </body>
+</html>

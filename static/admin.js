@@ -25,6 +25,7 @@ window.PageQuakejs = {
       },
       maps: [],
       games: [],
+      showClosed: false,
       pagination: {
         sortBy: 'createdAt',
         descending: true,
@@ -277,6 +278,7 @@ window.PageQuakejs = {
             new URLSearchParams({
               page: pagination.page,
               rowsPerPage: pagination.rowsPerPage,
+              include_closed: this.showClosed,
               sortBy: pagination.sortBy,
               descending: pagination.descending
             })
@@ -309,6 +311,7 @@ window.PageQuakejs = {
       try {
         await this.requestArenaApi('games/' + game.id, 'DELETE')
         this.deleteDialog = {show: false, game: null}
+        this.pagination.page = 1
         await this.fetchGames()
       } catch (error) {
         this.showError(error)

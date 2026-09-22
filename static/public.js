@@ -193,6 +193,11 @@ function applyState(response) {
     arena.admitting=false
     command('disconnect')
     showEntry()
+    if (arena.transport) {
+      arena.transport.close()
+      clearInterval(arena.networkTimer)
+      window.location.reload()
+    }
     return
   }
   if (arena.player?.status==='alive') {
@@ -277,6 +282,12 @@ async function init() {
   if(!arena.playerToken) { arena.playerToken=randomToken();await remember('native-player',arena.playerToken) }
   $('address').value=(await client.getSessionValue('quakejs.address'))?.value||''
   await refresh()
+  if (arena.game?.status === 'closed') {
+    $('loading').textContent = 'Arena closed'
+    $('progress').hidden = true
+    $('connection').textContent = 'Closed'
+    return
+  }
   arena.transport=new window.QuakeTransport(arena.gameId,arena.playerToken,applyState,message=>{
     arena.admitting=false;status(message);$('connection').textContent='Reconnecting…'
     $('overlay').hidden=false;document.exitPointerLock?.()
@@ -286,6 +297,7 @@ async function init() {
     $('progress').value = Math.round(value * 100)
     $('loading').textContent = `Loading OpenArena · ${Math.round(value * 100)}%`
   })
+  if (arena.game?.status === 'closed') return
   $('loading').textContent = 'Starting OpenArena…'
   arena.module = await window.QuakeArena(engineOptions({isHost: false}))
   if (arena.engineFailed) throw new Error('OpenArena could not start on this browser. No entry payment is required.')

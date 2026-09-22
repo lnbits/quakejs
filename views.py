@@ -152,6 +152,19 @@ async def public_page(request: Request, arena_id: str):
     arena = await crud.one("SELECT * FROM quakejs.arenas WHERE id=:id", id=arena_id)
     if not arena:
         raise HTTPException(404, "Arena not found.")
+    if not arena["active"]:
+        setting = await crud.settings_for(arena["owner_id"])
+        lobby_url = (
+            "/quakejs/lobby/" + setting["public_id"]
+            if setting and setting["allow_public_creation"] and setting["public_id"]
+            else ""
+        )
+        return renderer.TemplateResponse(
+            "quakejs/closed.html",
+            {"request": request, "name": arena["name"], "lobby_url": lobby_url},
+            status_code=410,
+            headers={"Cache-Control": "no-store"},
+        )
     game = crud.public_arena(arena)
     title = f"FIGHT ME IN QUAKE · SATS FOR KILLS · {game['joinAmount']} SATS TO JOIN"
     fee_label = f"{game['haircut']}% arena fee"
@@ -178,6 +191,7 @@ async def public_page(request: Request, arena_id: str):
             "share_height": HEIGHT,
         },
         headers={
+            "Cache-Control": "no-store",
             "Content-Security-Policy": (
                 "frame-ancestors 'self'; object-src 'none'; base-uri 'none'"
             ),
@@ -293,19 +307,24 @@ async def put_server_settings(
 async def list_games(
     page: int = 1,
     rows_per_page: int = Query(default=10, alias="rowsPerPage"),
+    include_closed: bool = False,
     key: WalletTypeInfo = Depends(require_admin_key),
 ):
     size = min(100, max(1, rows_per_page))
     rows = await crud.all_rows(
-        "SELECT * FROM quakejs.arenas WHERE owner_id=:owner ORDER BY created_at"
+        "SELECT * FROM quakejs.arenas WHERE owner_id=:owner "
+        "AND (:include_closed=1 OR active=1) ORDER BY created_at"
         " DESC,id DESC LIMIT :limit OFFSET :offset",
         owner=key.wallet.user,
+        include_closed=int(include_closed),
         limit=size,
         offset=max(0, page - 1) * size,
     )
     count = await crud.one(
-        "SELECT COUNT(*) AS n FROM quakejs.arenas WHERE owner_id=:owner",
+        "SELECT COUNT(*) AS n FROM quakejs.arenas WHERE owner_id=:owner "
+        "AND (:include_closed=1 OR active=1)",
         owner=key.wallet.user,
+        include_closed=int(include_closed),
     )
     games = []
     for row in rows:

@@ -132,6 +132,11 @@
         <q-card-section class="row items-center q-gutter-sm">
           <h6 class="text-subtitle1 q-my-none">Arenas</h6>
           <q-space></q-space>
+          <q-toggle
+            v-model="showClosed"
+            label="Show closed games"
+            @update:model-value="pagination.page = 1; fetchGames()"
+          ></q-toggle>
           <q-btn
             color="primary"
             label="New arena"

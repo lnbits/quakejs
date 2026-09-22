@@ -102,6 +102,18 @@ async def test_owner_closure_preserves_ledger_and_cannot_be_undone_by_payment(ar
     key = SimpleNamespace(wallet=SimpleNamespace(user="owner"))
     assert await views.close_game(game["id"], key) == {"success": True}
     assert await views.close_game(game["id"], key) == {"success": True}
+    listed = await views.list_games(page=1, rows_per_page=1, key=key)
+    assert listed["total"] == 1  # The original fixture arena remains active.
+    assert [row["id"] for row in listed["games"]] == [arena["id"]]
+    archived = await views.list_games(rows_per_page=10, include_closed=True, key=key)
+    assert archived["total"] == 2
+    assert game["id"] in {row["id"] for row in archived["games"]}
+    other = await views.list_games(
+        rows_per_page=10,
+        include_closed=True,
+        key=SimpleNamespace(wallet=SimpleNamespace(user="other-owner")),
+    )
+    assert other == {"games": [], "total": 0}
     payment = SimpleNamespace(
         success=True,
         is_in=True,

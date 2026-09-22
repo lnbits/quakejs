@@ -101,6 +101,45 @@ def test_large_entry_price_still_renders_with_bounded_cache():
     assert render_share_image.cache_info().maxsize == 32
 
 
+def test_closed_arena_has_no_engine_scripts_or_join_form(monkeypatch):
+    monkeypatch.setattr(
+        views.renderer.env,
+        "loader",
+        FileSystemLoader(str(Path(views.__file__).parent / "templates")),
+    )
+
+    async def lookup(sql, **kwargs):
+        return {
+            "active": 0,
+            "owner_id": "private-owner",
+            "name": "<script>bad</script>",
+        }
+
+    setting = {"allow_public_creation": True, "public_id": "public-lobby"}
+
+    async def settings_for(owner):
+        assert owner == "private-owner"
+        return setting
+
+    monkeypatch.setattr(crud, "one", lookup)
+    monkeypatch.setattr(crud, "settings_for", settings_for)
+    app = FastAPI()
+    app.include_router(views.router, prefix="/quakejs")
+    with TestClient(app) as client:
+        response = client.get("/quakejs/games/closed")
+        assert response.status_code == 410
+        assert response.headers["cache-control"] == "no-store"
+        assert "This arena has closed." in response.text
+        assert 'href="/quakejs/lobby/public-lobby"' in response.text
+        for forbidden in ("<script", "<canvas", "<form", "private-owner", "engine.js"):
+            assert forbidden not in response.text
+        head = client.head("/quakejs/games/closed")
+        assert head.status_code == 410 and not head.content
+        assert head.headers["content-length"] == str(len(response.content))
+        setting["allow_public_creation"] = False
+        assert "/quakejs/lobby/" not in client.get("/quakejs/games/closed").text
+
+
 def test_public_lobby_share_card_is_available_to_crawlers_without_keys(monkeypatch):
     root = Path(views.__file__).parent
     monkeypatch.setattr(
