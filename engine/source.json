@@ -1,0 +1,11 @@
+{
+  "engine": "https://github.com/JWally/web-quaker.git",
+  "commit": "2434df5d7242e4de36deb6624798141d79d25020",
+  "license": "GPL-2.0-or-later",
+  "emscripten": "5.0.6",
+  "binaryen": "129",
+  "assets": "https://downloads.sourceforge.net/project/oarena/openarena-0.8.8.zip",
+  "assetsSha256": "5a8faf7f5b51f351b0a1618c06b6b98a5f1a6758f1d39818de2c87df2a0bac4a",
+  "assetSource": "https://github.com/jacobo-mc/openarena.git",
+  "assetSourceCommit": "5e0a080bee9b8854ae3ec814b333a512a84a57a8"
+}

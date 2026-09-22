@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{{ game.name }} · QuakeJS Arena</title>
+    <meta name="description" content="{{ share_description }}" />
+    <link rel="canonical" href="{{ share_url }}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="QuakeJS" />
+    <meta property="og:title" content="{{ share_title }}" />
+    <meta property="og:description" content="{{ share_description }}" />
+    <meta property="og:url" content="{{ share_url }}" />
+    <meta property="og:image" content="{{ share_image }}" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="{{ share_width }}" />
+    <meta property="og:image:height" content="{{ share_height }}" />
+    <meta property="og:image:alt" content="{{ share_title }}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{{ share_title }}" />
+    <meta name="twitter:description" content="{{ share_description }}" />
+    <meta name="twitter:image" content="{{ share_image }}" />
+    <meta name="twitter:image:alt" content="{{ share_title }}" />
+    <link rel="stylesheet" href="/quakejs/static/arena.css" />
+  </head>
+  <body>
+    <main id="arena-shell">
+      <section id="viewport" aria-label="Quake III arena">
+        <div id="game-hud" aria-label="Match status">
+          <div><span id="players">0 / 8 players</span> · <span id="lives">0 lives left</span> · <span id="tally">Won: 0 sats</span></div>
+          <span id="connection" role="status">Connecting…</span>
+          <span id="network" role="status"></span>
+        </div>
+        <button id="fullscreen" type="button">Fullscreen</button>
+        <canvas id="canvas" tabindex="0" aria-label="Game: WASD to move, mouse to aim, click to fire, space to jump"></canvas>
+        <div id="touch-controls" aria-label="Touch game controls" hidden>
+          <div id="touch-look" data-touch="look" aria-label="Swipe to aim"><span>Swipe to aim</span></div>
+          <div id="touch-move" data-touch="move" aria-label="Movement stick"><span></span></div>
+          <button id="touch-fire" data-touch="attack" type="button">Fire</button>
+          <button id="touch-jump" data-touch="moveup" type="button">Jump</button>
+          <button id="touch-weapon" data-touch="weapon" type="button">Weapon</button>
+          <button id="touch-menu" data-touch="menu" type="button">Menu</button>
+        </div>
+        <div id="overlay">
+          <div class="panel">
+            <div class="eyebrow">QUAKEJS · <span id="arena-name">Lightning Arena</span></div>
+            <h1>Every life has a stake.</h1>
+            <p id="terms">Loading arena…</p>
+            <p id="loading" role="status">Preparing game assets…</p>
+            <progress id="progress" max="100" value="0"></progress>
+            <form id="join-form">
+              <label id="address-label" for="address">Your Lightning address</label>
+              <input id="address" type="text" maxlength="320" autocomplete="off" placeholder="you@example.com" required />
+              <button id="join-button" type="button" disabled>Pay for 5 lives</button>
+            </form>
+            <div id="invoice" hidden><img id="invoice-qr" alt="Lightning invoice QR code" /><textarea id="invoice-text" aria-label="Lightning invoice" readonly rows="2" spellcheck="false"></textarea><button id="copy-invoice" type="button">Copy invoice</button></div>
+            <p id="role" class="fine"></p>
+            <p id="status" role="status" aria-live="polite"></p>
+            <button id="resume" type="button" hidden>Enter arena</button>
+            <p id="control-help" class="controls">WASD move · Mouse aim · Click fire · Space jump · 1–9 weapons · Esc release mouse</p>
+            <p class="fine">The dedicated server referees the match. Each payment buys five lives. Dying, disconnecting or reloading uses the current life; unused lives stay saved. Pay again when all five are used.</p>
+      <details class="credits"><summary>Quake III / ioquake3 · OpenArena · Credits, licenses and source</summary>
+        <p>Complete corresponding engine and editable asset sources are included. The source archives below are wrapped in JavaScript comments as base64. Download and decode with:</p>
+        <pre id="source-instructions"></pre>
+        <pre id="license-text"></pre>
+      </details>
+          </div>
+        </div>
+      <aside><ol id="roster" aria-label="Players"></ol><ol id="feed" aria-label="Arena activity" aria-live="polite"></ol></aside>
+      </section>
+    </main>
+    <script src="/quakejs/static/client.js"></script>
+    <script src="/quakejs/static/qr.js"></script>
+    <script src="/quakejs/static/arena/loader.js"></script>
+    <script src="/quakejs/static/arena/transport.js"></script>
+    <script src="/quakejs/static/arena/touch.js"></script>
+    <script src="/quakejs/static/arena/engine.js"></script>
+    <script src="/quakejs/static/licenses.js"></script>
+    <script src="/quakejs/static/public.js"></script>
+  </body>
+</html>

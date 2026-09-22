@@ -1,0 +1,8 @@
+[
+  {
+    "path": "/quakejs/",
+    "name": "PageQuakejs",
+    "template": "/quakejs/static/index.vue",
+    "component": "/quakejs/static/admin.js"
+  }
+]

@@ -1,0 +1,42 @@
+QuakeJS Arena — third-party software and content
+
+Quake III / ioquake3 engine: Copyright id Software and ioquake3 contributors.
+Browser transport fork: JWally/web-quaker, commit
+2434df5d7242e4de36deb6624798141d79d25020.
+License: GNU GPL version 2 or later; see ioquake3.txt.
+Modifications: JavaScript engine build for the LNbits CSP; private
+packet transport; paid admission validation; server-game-VM frag callback;
+disabled free respawns; touch controls; dedicated server admission and death
+journaling; Linux process confinement; projectile cleanup on disconnect.
+Corresponding modified engine and game-VM source:
+/quakejs/static/sources/engine-source.js
+This is a base64 gzip tar archive wrapped in a JavaScript comment, to fit the
+LNbits static-file policy. Remove its first and last lines and base64-decode
+the remaining text to obtain engine-source.tar.gz. The extracted source
+includes the modified engine source and build/patch files in arena-build.
+
+OpenArena 0.8.8: Copyright the OpenArena contributors.
+License: GNU GPL version 2, with compatible licenses on individual contributed
+assets. See OpenArena-COPYING.txt, OpenArena-CREDITS.txt and OpenArena-README.txt.
+The asset package is a subset of the official release (Aggressor, OA DM1, OA DM2 and Kaos 2 maps; Major
+player, weapons, sounds, textures and supporting UI). Quake III retail/demo
+data is not included. Asset files are unmodified; game VMs are built from the
+modified engine source above. Distribution URL and SHA256 are in source.json.
+Editable source mirror: https://github.com/jacobo-mc/openarena
+Revision: 5e0a080bee9b8854ae3ec814b333a512a84a57a8
+/quakejs/static/sources/asset-source.js
+Decode this archive using the same procedure described above.
+Upstream source: http://openarena.ws/svn/source/
+
+Emscripten 5.0.6 / Binaryen 129 are build tools, not server dependencies.
+Their generated runtime glue is covered by the licenses in the engine source
+and Emscripten.txt (MIT / University of Illinois-NCSA).
+
+Quake and Quake III Arena are trademarks of their respective owners. This
+community extension is not affiliated with or endorsed by id Software.
+
+Static dedicated executable: musl 1.2.5 (MIT; musl.txt) and GCC 15.2.0 runtime
+(GPLv3 with GCC Runtime Library Exception; GCC-GPL3.txt and
+GCC-runtime-exception.txt). Build-only toolchain pinned in engine/native-shell.nix.
+Musl notice: https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT?h=v1.2.5
+GCC notices: https://github.com/gcc-mirror/gcc/tree/releases/gcc-15.2.0

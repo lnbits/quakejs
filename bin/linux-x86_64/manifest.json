@@ -1,0 +1,9 @@
+{
+  "platform": "linux-x86_64",
+  "sha256": "3091c0f067c647f1db6662587b388682f99659da61716d1874387d02fdb797cb",
+  "linkage": "static",
+  "musl": "1.2.5",
+  "gcc": "15.2.0",
+  "nixpkgs": "569d578509928497eddc3fdbf94a799027050be4.tar.gz",
+  "minimumLinux": "5.13 with Landlock enabled and seccomp available"
+}
