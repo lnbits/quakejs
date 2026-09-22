@@ -23,6 +23,7 @@ function showEntry() {
   $('overlay').hidden = false
   $('join-form').hidden = arena.player?.status === 'settling'
   $('invoice').hidden = true
+  $('create-new-game').hidden = !arena.lobbyUrl
   $('resume').hidden = true
   $('join-button').disabled = !!arena.engineFailed || arena.player?.status === 'settling'
   $('join-button').textContent = canRespawn() ? `Respawn · ${arena.player.livesRemaining} lives left` : 'Pay for 5 lives'
@@ -147,6 +148,7 @@ function engineStopped() {
 }
 
 function showInvoice(invoice) {
+  $('create-new-game').hidden = true
   clearTimeout(arena.invoiceTimer)
   if(invoice.expiresAt) arena.invoiceTimer=setTimeout(()=>{
     try { arena.transport.sendJSON({type:'refresh'}) } catch (_) {}
@@ -164,15 +166,21 @@ function applyState(response) {
   const previous=arena.player
   arena.game=response.game; arena.player=response.player
   $('arena-name').textContent=arena.game.name
-  $('terms').textContent=`${arena.game.joinAmount} sats buys 5 lives · ${arena.game.prizePerKill} sats paid per kill after the ${arena.game.haircut}% arena fee. Each life is worth 1/5 of the entry fee; payouts are rounded down to whole sats.`
+  const adminFee=arena.game.haircut, creatorFee=arena.game.creatorHaircut || 0
+  $('terms').textContent=`${arena.game.joinAmount} sats buys 5 lives · ${arena.game.prizePerKill} sats paid to you per kill after fees. Admin haircut: ${adminFee}% · Creator haircut: ${creatorFee}% · Total: ${adminFee + creatorFee}%. Both percentages apply to each life’s value (1/5 of the entry fee). Payouts round down to whole sats; the rounding remainder stays in the arena wallet.`
+  const lobbyLink=$('create-new-game')
+  arena.lobbyUrl=response.lobbyUrl
+  lobbyLink.hidden=!response.lobbyUrl || ! $('invoice').hidden
+  $('public-lobby-note').hidden=!response.lobbyUrl
+  if(response.lobbyUrl) lobbyLink.href=response.lobbyUrl
   $('players').textContent=`${arena.game.playersCount} / ${arena.game.maxPlayers} players`
   $('lives').textContent=`${arena.player?.livesRemaining||0} lives left`
   $('tally').textContent=`Won: ${response.won||0} sats`
   if(response.pendingWinnings) $('tally').textContent+=` · Pending: ${response.pendingWinnings} sats`
-  if(response.failedWinnings) $('tally').textContent+=` · Payout needs review: ${response.failedWinnings} sats`
   $('role').textContent='Dedicated arena server'
   if (arena.player?.status==='alive') {
     $('join-form').hidden=true; $('invoice').hidden=true
+    lobbyLink.hidden=!response.lobbyUrl
     syncMatch().catch(error=>status(error.message))
   } else if (arena.player?.autoAdmit && arena.module && !arena.admitting) {
     arena.admitting=true

@@ -9,7 +9,7 @@ from sqlalchemy import text
 
 from lnbits.db import Database
 
-from .models import MAX_PLAYERS, prize_per_kill
+from .models import MAX_PLAYERS, MAX_TOTAL_HAIRCUT, PublicError, prize_per_kill
 
 db = Database("ext_quakejs")
 
@@ -28,7 +28,7 @@ def token_hash(token: str):
         or len(token) != 48
         or any(c not in "0123456789abcdef" for c in token)
     ):
-        raise ValueError("Invalid player session.")
+        raise PublicError("Invalid player session.")
     return hashlib.sha256(token.encode()).hexdigest()
 
 
@@ -54,7 +54,7 @@ class Tx:
             id=arena_id,
         )
         if not row or (active and not row["active"]):
-            raise ValueError("Arena is unavailable.")
+            raise PublicError("Arena is unavailable.")
         return row
 
 
@@ -95,7 +95,11 @@ async def settings_for(owner):
     return await one("SELECT * FROM quakejs.settings_native WHERE id=:id", id=owner)
 
 
-async def save_settings(owner, wallet_id, enabled, haircut):
+async def save_settings(
+    owner, wallet_id, enabled, haircut, allow_public_creation=False
+):
+    if type(haircut) is not int or not 0 <= haircut <= MAX_TOTAL_HAIRCUT:
+        raise ValueError("The service fee must be a whole percentage from 0 to 50.")
     async with transaction() as tx:
         await tx.execute(
             "INSERT INTO "
@@ -109,6 +113,13 @@ async def save_settings(owner, wallet_id, enabled, haircut):
             fee=haircut,
             now=now(),
         )
+        await tx.execute(
+            "UPDATE quakejs.settings_native SET allow_public_creation=:allowed,"
+            "public_id=COALESCE(public_id,:public) WHERE id=:id",
+            allowed=int(allow_public_creation),
+            public=uid(),
+            id=owner,
+        )
     return await settings_for(owner)
 
 
@@ -119,10 +130,13 @@ async def create_arena(owner, data):
         )
         if not settings or not settings["enabled"]:
             raise ValueError("Enable QuakeJS and select a wallet first.")
+        if not 0 <= settings["haircut"] <= MAX_TOTAL_HAIRCUT:
+            raise ValueError("Set the service fee between 0 and 50% first.")
         arena_id = uid()
         await tx.execute(
             "INSERT INTO "
-            "quakejs.arenas(id,owner_id,wallet_id,name,map,entry_amount,haircut,created_at)"
+            "quakejs.arenas(id,owner_id,wallet_id,name,map,entry_a"
+            "mount,haircut,created_at)"
             "\n            "
             "VALUES(:id,:owner,:wallet,:name,:map,:amount,:fee,:now)",
             id=arena_id,
@@ -154,7 +168,7 @@ async def reserve_entry(arena_id, token, data):
             "SELECT * FROM quakejs.settings_native WHERE id=:id", id=arena["owner_id"]
         )
         if not setting or not setting["enabled"]:
-            raise ValueError("This arena is not accepting new entries.")
+            raise PublicError("This arena is not accepting new entries.")
         player = await participant(tx, arena_id, token)
         if player:
             existing = await tx.one(
@@ -169,7 +183,7 @@ async def reserve_entry(arena_id, token, data):
                 id=player["id"],
             )
             if remaining["n"]:
-                raise ValueError(
+                raise PublicError(
                     "You already have unused lives. Respawn instead of paying again."
                 )
             existing = await tx.one(
@@ -191,12 +205,13 @@ async def reserve_entry(arena_id, token, data):
             now=now(),
         )
         if occupied["n"] >= MAX_PLAYERS:
-            raise ValueError("This arena is full. Try again when a slot opens.")
+            raise PublicError("This arena is full. Try again when a slot opens.")
         if not player:
             player = {"id": uid()}
             await tx.execute(
                 "INSERT INTO "
-                "quakejs.participants(id,arena_id,token_hash,name,ln_address,created_at)"
+                "quakejs.participants(id,arena_id,token_hash,name,"
+                "ln_address,created_at)"
                 "\n                VALUES(:id,:arena,:token,:name,:address,:now)",
                 id=player["id"],
                 arena=arena_id,
@@ -208,9 +223,12 @@ async def reserve_entry(arena_id, token, data):
         entry_id = uid()
         await tx.execute(
             "INSERT INTO "
-            "quakejs.entries(id,arena_id,player_id,nonce,wallet_id,amount,haircut,ln_address,status,created_at,expires_at)"
+            "quakejs.entries(id,arena_id,player_id,nonce,wallet_id"
+            ",amount,haircut,ln_address,status,created_at,expires_"
+            "at)"
             "\n            "
-            "VALUES(:id,:arena,:player,:nonce,:wallet,:amount,:fee,:address,'creating',:now,:expires)",
+            "VALUES(:id,:arena,:player,:nonce,:wallet,:amount,:fee"
+            ",:address,'creating',:now,:expires)",
             id=entry_id,
             arena=arena_id,
             player=player["id"],
@@ -276,7 +294,10 @@ async def settle_entry(payment):
         # A payment may have settled before expiry but its notification arrived
         # after the owner closed the arena. Honor those already purchased lives.
         await tx.execute(
-            "UPDATE quakejs.arenas SET active=1 WHERE id=:id", id=entry["arena_id"]
+            "UPDATE quakejs.arenas SET "
+            "active=1,lobby_hidden=0,idle_since=:now WHERE id=:id",
+            now=now(),
+            id=entry["arena_id"],
         )
         await tx.execute(
             "UPDATE quakejs.participants SET ln_address=:address WHERE id=:id",
@@ -292,7 +313,7 @@ async def consume_death(run_id, sequence, victim_id, killer_id):
         run = await tx.one("SELECT * FROM quakejs.runs WHERE id=:id", id=run_id)
         if not run:
             raise ValueError("Unknown server run.")
-        await tx.lock_arena(run["arena_id"], active=False)
+        arena = await tx.lock_arena(run["arena_id"], active=False)
         run = await tx.one("SELECT * FROM quakejs.runs WHERE id=:id", id=run_id)
         if sequence <= run["event_sequence"]:
             return run["arena_id"]
@@ -341,12 +362,16 @@ async def consume_death(run_id, sequence, victim_id, killer_id):
                     id=killer["entry_id"],
                 )
                 # Exact integer arithmetic: floor((entry / 5) * (1 - fee/100)).
-                amount = prize_per_kill(entry["amount"], entry["haircut"])
+                creator_fee = arena["creator_haircut"] if arena["is_public"] else 0
+                amount = prize_per_kill(entry["amount"], entry["haircut"] + creator_fee)
                 await tx.execute(
                     "INSERT INTO "
-                    "quakejs.payouts(id,arena_id,victim_id,killer_id,player_id,wallet_id,ln_address,amount,status,created_at,updated_at)"
+                    "quakejs.payouts(id,arena_id,victim_id,killer_"
+                    "id,player_id,wallet_id,ln_address,amount,stat"
+                    "us,created_at,updated_at)"
                     "\n                    "
-                    "VALUES(:id,:arena,:victim,:killer,:player,:wallet,:address,:amount,:status,:now,:now)"
+                    "VALUES(:id,:arena,:victim,:killer,:player,:wa"
+                    "llet,:address,:amount,:status,:now,:now)"
                     "\n                    ON CONFLICT(victim_id) DO NOTHING",
                     id=uid(),
                     arena=run["arena_id"],
@@ -359,6 +384,25 @@ async def consume_death(run_id, sequence, victim_id, killer_id):
                     status="queued" if amount else "withheld",
                     now=now(),
                 )
+                creator_amount = entry["amount"] * creator_fee // 500
+                if creator_amount:
+                    await tx.execute(
+                        "INSERT INTO quakejs.creator_payouts "
+                        "(id,arena_id,victim_id,killer_id,wallet_i"
+                        "d,ln_address,amount,status,created_at,upd"
+                        "ated_at) "
+                        "VALUES(:id,:arena,:victim,:killer,:wallet"
+                        ",:address,:amount,'queued',:now,:now) "
+                        "ON CONFLICT(victim_id) DO NOTHING",
+                        id=uid(),
+                        arena=run["arena_id"],
+                        victim=victim_id,
+                        killer=killer_id,
+                        wallet=entry["wallet_id"],
+                        address=arena["creator_ln_address"],
+                        amount=creator_amount,
+                        now=now(),
+                    )
         await tx.execute(
             "UPDATE quakejs.runs SET event_sequence=:seq WHERE id=:id",
             id=run_id,
@@ -371,10 +415,10 @@ async def allocate_life(arena_id, token, run_id):
     async with transaction() as tx:
         arena = await tx.lock_arena(arena_id)
         if arena["run_id"] != run_id or arena["lease_until"] <= now():
-            raise ValueError("Game server is restarting. Please retry.")
+            raise PublicError("Game server is restarting. Please retry.")
         player = await participant(tx, arena_id, token)
         if not player:
-            raise ValueError("A paid entry is required.")
+            raise PublicError("A paid entry is required.")
         current = await tx.one(
             "SELECT * FROM quakejs.lives WHERE player_id=:id AND status IN "
             "('alive','left') ORDER BY created_at DESC LIMIT 1",
@@ -388,7 +432,7 @@ async def allocate_life(arena_id, token, run_id):
             id=player["id"],
         )
         if not entry:
-            raise ValueError("No lives left. Pay for another five lives.")
+            raise PublicError("No lives left. Pay for another five lives.")
         occupied = await tx.all(
             "SELECT slot FROM quakejs.lives WHERE arena_id=:id AND " "status='alive'",
             id=arena_id,
@@ -396,7 +440,10 @@ async def allocate_life(arena_id, token, run_id):
         used = {r["slot"] for r in occupied}
         slot = next((s for s in range(1, MAX_PLAYERS + 1) if s not in used), None)
         if slot is None:
-            raise ValueError("Arena full. Your remaining lives are saved.")
+            raise PublicError("Arena full. Your remaining lives are saved.")
+        await tx.execute(
+            "UPDATE quakejs.arenas SET idle_since=NULL WHERE id=:id", id=arena_id
+        )
         if current:
             await tx.execute(
                 "UPDATE quakejs.lives SET "
@@ -412,7 +459,8 @@ async def allocate_life(arena_id, token, run_id):
             life_id = uid()
             await tx.execute(
                 "INSERT INTO "
-                "quakejs.lives(id,arena_id,player_id,entry_id,run_id,status,slot,connected_until,created_at)"
+                "quakejs.lives(id,arena_id,player_id,entry_id,run_"
+                "id,status,slot,connected_until,created_at)"
                 "\n                "
                 "VALUES(:id,:arena,:player,:entry,:run,'alive',:slot,:until,:now)",
                 id=life_id,
@@ -428,13 +476,19 @@ async def allocate_life(arena_id, token, run_id):
 
 
 def public_arena(arena, count=0):
+    creator_fee = arena.get("creator_haircut", 0) if arena.get("is_public") else 0
     return {
         "id": arena["id"],
         "name": arena["name"],
         "map": arena["map"],
         "joinAmount": arena["entry_amount"],
         "haircut": arena["haircut"],
-        "prizePerKill": prize_per_kill(arena["entry_amount"], arena["haircut"]),
+        "prizePerKill": prize_per_kill(
+            arena["entry_amount"], arena["haircut"] + creator_fee
+        ),
+        "creatorHaircut": creator_fee,
+        "creatorPerKill": arena["entry_amount"] * creator_fee // 500,
+        "publicCreated": bool(arena.get("is_public")),
         "playersCount": count,
         "maxPlayers": MAX_PLAYERS,
         "status": "active" if arena["active"] else "closed",
@@ -447,7 +501,7 @@ async def public_state(arena_id, token=""):
         tx = Tx(connection.conn)
         arena = await tx.one("SELECT * FROM quakejs.arenas WHERE id=:id", id=arena_id)
         if not arena:
-            raise ValueError("Arena not found.")
+            raise PublicError("Arena not found.")
         roster = await tx.all(
             "SELECT l.id,p.name FROM quakejs.lives l JOIN quakejs.participants "
             "p ON p.id=l.player_id\n            WHERE l.arena_id=:id AND "
@@ -464,6 +518,16 @@ async def public_state(arena_id, token=""):
             "failedWinnings": 0,
             "canJoin": bool(arena["active"]) and len(roster) < MAX_PLAYERS,
         }
+        setting = await tx.one(
+            "SELECT public_id,allow_public_creation FROM "
+            "quakejs.settings_native WHERE id=:id",
+            id=arena["owner_id"],
+        )
+        result["lobbyUrl"] = (
+            "/quakejs/lobby/" + setting["public_id"]
+            if setting and setting["allow_public_creation"] and setting["public_id"]
+            else ""
+        )
         player = await participant(tx, arena_id, token) if token else None
         if not player:
             return result
@@ -525,3 +589,16 @@ async def public_state(arena_id, token=""):
             "payoutAmount": 0,
         }
         return result
+
+
+async def server_capacity():
+    row = await one("SELECT max_matches FROM quakejs.server_settings WHERE id=1")
+    return row["max_matches"] if row else 4
+
+
+async def save_server_capacity(max_matches):
+    async with transaction() as tx:
+        await tx.execute(
+            "UPDATE quakejs.server_settings SET max_matches=:maximum WHERE id=1",
+            maximum=max_matches,
+        )

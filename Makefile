@@ -1,8 +1,8 @@
 ROOT := $(abspath ../../..)
 PYTHON := $(ROOT)/.venv/bin/python
 ENV := DEBUG=true LNBITS_BACKEND_WALLET_CLASS=FakeWallet LNBITS_DATABASE_URL= LNBITS_DATA_FOLDER=$(CURDIR)/dev/test-data PYTHONPATH=$(ROOT)
-PYFILES := $(wildcard *.py) $(wildcard tests/*.py)
-JSFILES := static/admin.js static/public.js static/client.js static/arena/loader.js static/arena/transport.js
+PYFILES := $(wildcard *.py) $(wildcard tests/*.py) engine/package.py engine/update-maps.py engine/logo_maps.py
+JSFILES := static/admin.js static/public.js static/client.js static/lobby.js static/arena/loader.js static/arena/transport.js
 
 .PHONY: check test lint smoke sandbox-check package
 check: lint test
@@ -14,6 +14,7 @@ lint:
 
 test:
 	$(ENV) $(PYTHON) -m pytest tests -o addopts='' -q
+	node --test tests/test_assets.mjs
 
 smoke:
 	$(ENV) $(PYTHON) tests/smoke.py

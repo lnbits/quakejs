@@ -12,6 +12,15 @@ operators do not run Node, Docker, another network service or a separate game
 server command. The only public connection is the existing LNbits HTTP/WebSocket
 endpoint. HTTPS is required for normal internet deployment.
 
+When installing from a Git clone, Git LFS must be installed and available to your
+Git client. Run `git lfs install` and `git lfs pull` inside the extension checkout.
+`static/arena/baseoa/arena.pk3` should be about 186 MiB, and
+`static/sources/asset-source.js` about 803 MiB. A roughly 134-byte file is an LFS
+pointer and cannot be used as a game asset. On NixOS, a temporary `nix-shell`
+does not make Git LFS available to an already running desktop Git client; install
+it in that client's environment too. After restoring missing files, hard-refresh
+the game page. The loader retries invalid cached assets once from the server.
+
 This implementation targets LNbits 1.6.2-rc1's invoice listener and wallet APIs.
 Use one LNbits application worker and one shared data directory. An OS file lock
 prevents duplicate game supervisors. Linux must support Landlock and seccomp;
@@ -25,7 +34,7 @@ verifies the binary checksum and restores its execute bit after ZIP installation
 3. Set the service fee, then create an arena with a title, entry price and map.
 4. Share the arena link. Payment confirmation arrives over the player WebSocket.
 
-Five lives cost the arena's entry fee, with a minimum of 50 sats. Each death
+Five lives cost the arena's entry fee, with a minimum of 100 sats. Each death
 consumes one life. Disconnecting, reloading or timing out also consumes the
 current admitted life, without a winner payout; the other unused lives stay saved.
 Opening the in-game menu does not disconnect, and the player remains vulnerable.
@@ -36,8 +45,8 @@ Lightning address. Suicide and world deaths have no winner payout. Routing fees
 are charged by LNbits to the arena wallet in addition to the payout amount.
 Maintain enough wallet balance to settle outstanding payouts.
 
-For example, a 50-sat entry and 5% service fee pays 9 sats per kill after rounding;
-a 100-sat entry pays 19 sats. The public page displays this net prize. Existing
+For example, a 100-sat entry and 5% service fee pays 19 sats per kill after rounding.
+The public page displays this net prize. Existing
 arenas retain their own entry price and fee when settings or other arenas change.
 
 Public arena links include server-rendered Open Graph and Twitter card metadata.
@@ -49,9 +58,13 @@ those services can cache old previews. Artwork provenance and the rendering prom
 are in `static/share/README.md`; the bundled font license is alongside it.
 
 Eight players can be active in one match. A full arena refuses admission; existing
-unused lives remain in its ledger. Four engine processes may run by default;
-`QUAKEJS_MAX_MATCHES` accepts 1–32. This is a resource bound, not a performance
-promise. Benchmark the target VPS before increasing it. Empty servers stop after
+unused lives remain in its ledger. The default is four running matches. An
+LNbits server admin can change **Server capacity → Maximum simultaneous matches**
+to 1–32 in the QuakeJS backend. The saved limit applies across all owners and
+survives restarts; it replaces the environment-only cap. Lowering it never ends
+existing matches. Ordinary arena owners cannot change this server-wide limit.
+This is a resource bound, not a performance promise. See [the m.16 capacity estimate](CAPACITY.md) and benchmark the target
+VPS before increasing it. Empty servers stop after
 five minutes. A native process is limited to 512 MiB of address space and 64 file
 descriptors. Game assets are shared through the operating system's file cache.
 
@@ -134,7 +147,11 @@ The engine fork and asset versions are pinned in `engine/source.json`.
 `engine/patch.mjs` contains the existing browser/game modifications;
 `engine/patch-native.mjs`, `engine/native.c` and `engine/sandbox.h` implement the
 private dedicated server transport and confinement. OpenArena assets contain
-Aggressor, OA DM1, OA DM2 and Kaos 2. Retail Quake III data is not included.
+Aggressor, OA DM7, OA Minia, Czest1dm, OA Shine and Kaos 2. Retail Quake III data
+is not included.
+Each map has two Bitfest and two LNbits wall graphics. Original logo files and
+their editable placements are in `engine/logos`; the map build preserves their
+proportions and transparency without adding collision geometry.
 Corresponding engine and editable asset source archives and licenses are supplied
 under `static/sources` and `static/licenses`; see the in-game Credits panel.
 
@@ -148,7 +165,7 @@ invoices and death events, five-life exhaustion and repurchase, payout timeout
 recovery without resending, owner checks, map/amount validation, cross-origin
 WebSocket rejection, two real browser clients joining and respawning, an actual
 native frag creating one payout, WebSocket and engine disconnects and native
-timeouts consuming exactly one life without payouts, all four maps starting under
+timeouts consuming exactly one life without payouts, all selectable maps starting under
 confinement, mobile-emulated touch movement, and the admin map/arena creation UI.
 The tests use synthetic payments: a real Lightning wallet/backend payment cycle,
 PostgreSQL, physical mobile devices and VPS load limits have not been validated.
@@ -157,3 +174,53 @@ Build instructions are in `engine/BUILD.md`. `make package` writes a ZIP and
 SHA256 file under `dev/`, excluding local test databases, logs and build trees.
 The package includes editable asset sources for license compliance; these are
 not downloaded by players during normal gameplay.
+
+## Public lobbies — version 1.1.0
+
+Enable **Allow public game creation** in QuakeJS settings, then use **Open public
+lobby** to share the public URL. Visitors can choose a map, title, entry price,
+creator fee and Lightning address without an LNbits account. The lobby lists the
+owner's active arenas with live player counts over WebSockets, and shows the top
+ten Lightning addresses ranked by successfully paid kill winnings. Full winner
+addresses are public; creator fees and pending payouts do not count. The normal
+game dialog includes a **Create new game** link while the lobby is enabled.
+Shared lobby links show a card reading “CREATE QUAKE MATCHES / AND CHARGE A JOIN
+FEE”. The game page has a small centered “POWERED BY LNBITS” credit at the bottom.
+
+Admin and creator percentages are each taken from the gross value of one life.
+For example, a 100-sat entry buys five 20-sat lives. With a 5% admin fee and 10%
+creator fee, each verified kill pays **17 sats to the killer and 2 sats to the
+creator**, leaving 1 sat in the arena wallet. Transfers round down to whole sats;
+the arena wallet retains rounding remainders. Combined admin and creator fees cannot exceed 50% of each life’s value.
+Creator fees can be zero, in which case no creator address is required. Fees and
+the funding wallet are fixed when the arena is created. The creator's fee is a
+separate durable payout, retried independently of winnings and respawns.
+
+Public games disappear after ten minutes with no connected players, unless they
+have unused paid lives or live pending entry invoices. **Games with unused lives
+stay listed.** Admin-created games never expire automatically. Financial history
+and pending payouts are retained when a game expires, and a delayed successful
+payment notification restores the game and its purchased lives. The existing
+five-minute idle engine shutdown still applies: retaining lives does not keep a
+game server running. Browsing the lobby and creating a game start no engine and
+download no game packs.
+
+Anonymous creation is limited to five requests per minute per source IP and fifty
+active or recently created public games per owner (one-hour window). Creation is
+idempotent and the owner limit is checked under a database lock. Public APIs never
+accept wallet IDs or keys. Disabling public creation closes the lobby and removes
+its game-dialog link; existing game links and paid lives continue to work.
+
+Restart LNbits after updating to apply migration 9 and load the new background
+maintenance task, then refresh browser tabs. Migration 9 preserves existing
+arenas and payment records and can resume after an interrupted update. No core
+changes, additional dependencies or external services are required.
+
+## Release 1.0.4
+
+This release fixes recovery of long match journals, fences lease renewal by run,
+recovers incomplete cached asset downloads, and prevents packaging missing LFS
+content or local credentials/data. Payment amounts and the five-life flow are
+unchanged. Schedule an LNbits restart after updating and hard-refresh game tabs.
+Run `make package` only after `git lfs pull`; it checks the native/game manifests,
+required maps and VMs, and ZIP integrity before writing the release checksum.

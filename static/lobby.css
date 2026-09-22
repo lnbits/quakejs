@@ -1,0 +1,149 @@
+body.lobby {
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: auto;
+  background: radial-gradient(ellipse at top, #253443, #090d12 65%);
+}
+body.lobby:has(dialog[open]) { overflow: hidden; }
+.lobby main {
+  height: auto;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.lobby main > .panel {
+  width: 100%;
+  max-height: none;
+  padding: 16px 20px;
+}
+.lobby .match-heading, .lobby .dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.lobby .match-heading {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ffad4570;
+}
+.lobby h1, .lobby h2 {
+  color: #fff;
+  font-size: 21px;
+  line-height: 1.3;
+  margin: 0;
+}
+.lobby .match-heading h1 { color: #ffca80; }
+.lobby .match-heading button, .lobby .close-dialog {
+  width: auto;
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.lobby .game {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 16px;
+  padding: 7px 8px;
+  border-bottom: 1px solid #344354;
+  border-left: 3px solid transparent;
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #bbc7d5;
+}
+.lobby .game:hover, .lobby .game:focus-visible { background: #243343; }
+.lobby .game-name {
+  color: #9ce76c;
+  font-family: ui-monospace, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.lobby .game-admin {
+  background: #9d40db24;
+  border-left-color: #cb75ff;
+}
+.lobby .game-admin:hover, .lobby .game-admin:focus-visible { background: #9d40db45; }
+.lobby .game-admin .game-name { color: #e4aaff; }
+.lobby .admin-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid #cb75ff;
+  border-radius: 3px;
+  color: #efd1ff;
+  font-size: 9px;
+  vertical-align: middle;
+}
+.lobby .game-players, .lobby .game-price {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.lobby .game-players { color: #fff; }
+.lobby .game-details { display: flex; flex-wrap: wrap; gap: 0 12px; }
+.lobby .game-fees { font-size: 11px; color: #9aabbe; }
+.lobby .pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: 11px;
+}
+.lobby .pagination button { width: auto; margin: 0; padding: 6px 10px; font-size: 11px; }
+.lobby .fee-help { margin-top: 12px; }
+.lobby .fee-help summary { cursor: pointer; }
+.lobby #lobby-status { margin: 6px 0 0; color: #71d5e5; }
+.lobby .scores { margin-top: 16px; }
+.lobby .scores h2 { font-size: 17px; }
+.lobby #scoreboard { margin: 10px 0; }
+.lobby #scoreboard li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #344354;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.lobby #scoreboard .address { overflow-wrap: anywhere; min-width: 0; }
+.lobby #scoreboard strong { white-space: nowrap; color: #ffad45; }
+.lobby dialog.public-dialog {
+  width: min(520px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: auto;
+  padding: 20px;
+  color: #dce4ed;
+  overflow-y: auto;
+}
+.lobby dialog::backdrop { background: #080d15d9; }
+.lobby .dialog-heading {
+  position: sticky;
+  top: -20px;
+  margin: -20px -20px 0;
+  padding: 14px 20px;
+  background: #111923;
+  z-index: 1;
+}
+.lobby .close-dialog { background: transparent; color: #dce4ed; }
+.lobby .close-dialog:hover { background: #344354; }
+.lobby select {
+  width: 100%;
+  font: inherit;
+  padding: 12px;
+  border-radius: 3px;
+  background: #080d14;
+  color: #fff;
+  border: 1px solid #516277;
+}
+.lobby #create-status { color: #71d5e5; }
+@media (max-width: 600px) {
+  .lobby main { padding: 12px; }
+  .lobby main > .panel { padding: 12px; }
+  .lobby .game { column-gap: 8px; padding: 7px 5px; }
+  .lobby .game-details { display: contents; }
+  .lobby .game-map { grid-column: 1 / -1; grid-row: 2; }
+  .lobby .game-fees { grid-column: 1 / -1; grid-row: 4; }
+  .lobby .game-price { grid-column: 1 / -1; grid-row: 3; text-align: left; }
+  .lobby input, .lobby select { font-size: 16px; }
+}

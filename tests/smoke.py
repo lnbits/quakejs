@@ -1,13 +1,21 @@
 import asyncio
 
 from lnbits.extensions.quakejs import crud
-from lnbits.extensions.quakejs.migrations import m007_native_arena_ledger
+from lnbits.extensions.quakejs.migrations import (
+    m007_native_arena_ledger,
+    m009_public_lobbies,
+    m010_server_capacity,
+)
 from lnbits.extensions.quakejs.models import MAPS, ArenaInput
 from lnbits.extensions.quakejs.server import manager
 
 
 async def main():
     await m007_native_arena_ledger(crud.db)
+    columns = await crud.all_rows("PRAGMA quakejs.table_info(settings_native)")
+    if not any(row["name"] == "allow_public_creation" for row in columns):
+        await m009_public_lobbies(crud.db)
+    await m010_server_capacity(crud.db)
     await crud.save_settings("test-owner", "test-wallet", True, 5)
     manager.directory.mkdir(parents=True, exist_ok=True)
     task = asyncio.create_task(manager.loop())

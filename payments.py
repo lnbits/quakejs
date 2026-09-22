@@ -19,6 +19,7 @@ from lnbits.core.services import create_invoice, get_pr_from_lnurl, pay_invoice
 from lnbits.core.services.payments import check_payment_status
 
 from . import crud
+from .models import PublicError
 
 
 def invoice_error_detail(error):
@@ -85,7 +86,7 @@ async def create_entry(arena_id, token, data):
             logger.warning(
                 "QuakeJS entry invoice needs reconciliation: {}", entry["id"]
             )
-            raise ValueError(
+            raise PublicError(
                 "Invoice creation is pending. Retry shortly; do not create "
                 "another entry."
             ) from None
@@ -93,7 +94,7 @@ async def create_entry(arena_id, token, data):
             "SELECT * FROM quakejs.entries WHERE id=:id", id=entry["id"]
         )
     if not entry.get("bolt11"):
-        raise ValueError("Your invoice is being prepared. Please retry shortly.")
+        raise PublicError("Your invoice is being prepared. Please retry shortly.")
     return {
         "playerToken": token,
         "paymentHash": entry["payment_hash"],
@@ -101,19 +102,42 @@ async def create_entry(arena_id, token, data):
     }
 
 
+def outbox_table(row):
+    table = row.get("_table", "payouts")
+    if table not in ("payouts", "creator_payouts"):
+        raise ValueError("Invalid payout kind.")
+    return table
+
+
 async def claim_payout():
     claim = crud.uid()
     async with crud.transaction() as tx:
+        candidate = await tx.one(
+            "SELECT id,kind FROM ("
+            "SELECT id,created_at,next_attempt,'payouts' AS kind "
+            "FROM quakejs.payouts WHERE "
+            "status IN ('queued','prepared','sending','pending') "
+            "AND next_attempt<=:now AND claimed_until<=:now "
+            "UNION ALL SELECT id,created_at,next_attempt,'creator_payouts' AS "
+            "kind FROM quakejs.creator_payouts WHERE "
+            "status IN ('queued','prepared','sending','pending') "
+            "AND next_attempt<=:now AND claimed_until<=:now"
+            ") AS ready ORDER BY next_attempt,created_at,id LIMIT 1",
+            now=crud.now(),
+        )
+        if not candidate:
+            return None
+        table = outbox_table({"_table": candidate["kind"]})
         row = await tx.one(
-            "UPDATE quakejs.payouts SET claim=:claim,claimed_until=:until"
-            "\n          WHERE id=(SELECT id FROM quakejs.payouts WHERE status "
-            "IN ('queued','prepared','sending','pending')\n          AND "
-            "next_attempt<=:now AND claimed_until<=:now ORDER BY created_at "
-            "LIMIT 1)\n          AND claimed_until<=:now RETURNING *",
+            f"UPDATE quakejs.{table} SET claim=:claim,claimed_until=:until "  # noqa: S608 - allowlisted table
+            "WHERE id=:id AND claimed_until<=:now RETURNING *",
+            id=candidate["id"],
             claim=claim,
             until=crud.now() + 90,
             now=crud.now(),
         )
+        if row:
+            row["_table"] = table
         return row
 
 
@@ -121,10 +145,28 @@ async def update_payout(row, status, **values):
     allowed = {"bolt11", "payment_hash", "attempts", "next_attempt", "error"}
     if not set(values) <= allowed:
         raise ValueError("Invalid payout update.")
+    table = outbox_table(row)
     fields = {key: values.get(key, row[key]) for key in allowed}
     async with crud.transaction() as tx:
+        if status == "prepared" and fields["payment_hash"]:
+            await tx.execute(
+                "INSERT INTO "
+                "quakejs.payout_invoice_claims(payment_hash,payout"
+                "_id) VALUES(:hash,:id) "
+                "ON CONFLICT(payment_hash) DO NOTHING",
+                hash=fields["payment_hash"],
+                id=row["id"],
+            )
+            owner = await tx.one(
+                "SELECT payout_id FROM "
+                "quakejs.payout_invoice_claims WHERE "
+                "payment_hash=:hash",
+                hash=fields["payment_hash"],
+            )
+            if owner["payout_id"] != row["id"]:
+                raise ValueError("Payout invoice was already used.")
         result = await tx.execute(
-            "UPDATE quakejs.payouts SET status=:status,updated_at=:now,"
+            f"UPDATE quakejs.{table} SET status=:status,updated_at=:now,"  # noqa: S608 - allowlisted table
             "bolt11=:bolt11,payment_hash=:payment_hash,attempts=:attempts,"
             "next_attempt=:next_attempt,error=:error WHERE id=:id AND claim=:claim",
             status=status,
@@ -182,13 +224,20 @@ async def process_payout(row):
                 wallet_id=row["wallet_id"],
                 payment_request=row["bolt11"],
                 max_sat=row["amount"],
-                description="QuakeJS frag payout",
+                description=(
+                    "QuakeJS creator fee"
+                    if outbox_table(row) == "creator_payouts"
+                    else "QuakeJS frag payout"
+                ),
                 tag="quakejs",
                 external_id=row["id"],
                 extra={
                     "tag": "quakejs",
                     "quakejs_payout": row["id"],
                     "quakejs_victim": row["victim_id"],
+                    "quakejs_kind": (
+                        "creator" if outbox_table(row) == "creator_payouts" else "kill"
+                    ),
                 },
             )
             if not matches_payout(payment, row):
@@ -218,6 +267,10 @@ async def process_payout(row):
 def matches_payout(payment, row):
     return (
         payment.is_out
+        and (
+            outbox_table(row) != "creator_payouts"
+            or payment.extra.get("quakejs_kind") == "creator"
+        )
         and payment.wallet_id == row["wallet_id"]
         and payment.payment_hash == row["payment_hash"]
         and payment.amount == -row["amount"] * 1000
@@ -282,12 +335,19 @@ async def payout_loop(notify):
         finally:
             if row:
                 try:
+                    # A timeout outside process_payout must also yield the queue
+                    # to other recipients. Never reset a possibly sent payment.
                     async with crud.transaction() as tx:
                         await tx.execute(
-                            "UPDATE quakejs.payouts SET claimed_until=0 WHERE "
-                            "id=:id AND claim=:claim",
+                            f"UPDATE quakejs.{outbox_table(row)} "  # noqa: S608 - allowlisted table
+                            "SET claimed_until=0,next_attempt=CASE WHEN "
+                            "status IN ('queued','prepared','sending','pending') "
+                            "AND next_attempt<=:now THEN :retry ELSE next_attempt END "
+                            "WHERE id=:id AND claim=:claim",
                             id=row["id"],
                             claim=row["claim"],
+                            now=crud.now(),
+                            retry=crud.now() + 30,
                         )
                 except Exception:
                     # An unavailable DB must not kill the payout worker. The

@@ -6,17 +6,28 @@ from urllib.parse import urlsplit
 
 from anyio import fail_after
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, WebSocket
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
+from loguru import logger
 from starlette.responses import JSONResponse, Response
-from starlette.websockets import WebSocketDisconnect
 
 from lnbits.core.crud import get_wallets
 from lnbits.core.models import WalletTypeInfo
 from lnbits.core.views.generic import index as lnbits_index
 from lnbits.decorators import check_user_exists, require_admin_key
 from lnbits.helpers import template_renderer
+from lnbits.settings import settings as lnbits_settings
 
-from . import crud
-from .models import MAPS, ArenaInput, EntryInput, SettingsInput
+from . import crud, lobby
+from .models import (
+    MAPS,
+    ArenaInput,
+    EntryInput,
+    PublicArenaInput,
+    PublicError,
+    ServerSettingsInput,
+    SettingsInput,
+)
 from .payments import create_entry
 from .server import manager
 from .share import HEIGHT, WIDTH, render_share_image
@@ -30,7 +41,34 @@ class PrivateJSONResponse(JSONResponse):
         )
 
 
-router = APIRouter(default_response_class=PrivateJSONResponse)
+class SafePublicRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        path = self.path.removeprefix("/quakejs")
+        public = path.startswith(
+            ("/games/", "/lobby/", "/api/v1/public/", "/api/v1/lobby/")
+        )
+
+        async def guarded(request):
+            try:
+                return await handler(request)
+            except (HTTPException, RequestValidationError):
+                raise
+            except Exception:
+                if not public:
+                    raise
+                logger.warning("QuakeJS public request failed; retry is available.")
+                return PrivateJSONResponse(
+                    {"detail": "QuakeJS is temporarily unavailable. Retry shortly."},
+                    status_code=503,
+                )
+
+        return guarded
+
+
+router = APIRouter(
+    default_response_class=PrivateJSONResponse, route_class=SafePublicRoute
+)
 renderer = template_renderer(["quakejs/templates"])
 limits = {}
 socket_slots = {}
@@ -47,14 +85,28 @@ def limit(key, maximum, period):
                 if not limits[candidate] or limits[candidate][-1] < current - 600:
                     del limits[candidate]
             if len(limits) >= 8192:
-                raise ValueError("Server busy. Please retry shortly.")
+                raise PublicError("Server busy. Please retry shortly.")
         limits[key] = deque()
     bucket = limits[key]
     while bucket and bucket[0] < current - period:
         bucket.popleft()
     if len(bucket) >= maximum:
-        raise ValueError("Too many requests. Please wait before retrying.")
+        raise PublicError("Too many requests. Please wait before retrying.")
     bucket.append(current)
+
+
+async def finish_on_cancel(operation):
+    """Finish short ledger work before disconnect cleanup starts using the DB.
+
+    Cancelling a socket must not interrupt SQLite's worker while it holds a
+    cursor/transaction, or leave a partially completed paid admission behind.
+    """
+    task = asyncio.create_task(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 def message_object(text):
@@ -73,7 +125,7 @@ def session(authorization):
     token = authorization[7:]
     try:
         crud.token_hash(token)
-    except ValueError as error:
+    except PublicError as error:
         raise HTTPException(401, str(error)) from None
     return token
 
@@ -93,10 +145,13 @@ async def public_page(request: Request, arena_id: str):
         raise HTTPException(404, "Arena not found.")
     game = crud.public_arena(arena)
     title = f"FIGHT ME IN QUAKE · SATS FOR KILLS · {game['joinAmount']} SATS TO JOIN"
+    fee_label = f"{game['haircut']}% arena fee"
+    if game["creatorHaircut"]:
+        fee_label += f" and {game['creatorHaircut']}% creator fee"
     description = (
         f"{game['joinAmount']} sats buys 5 lives. "
         f"Earn {game['prizePerKill']} sats per kill after the "
-        f"{game['haircut']}% arena fee. Join {game['name']}."
+        f"{fee_label}. Join {game['name']}."
     )
     return renderer.TemplateResponse(
         "quakejs/public.html",
@@ -148,9 +203,19 @@ def display_settings(row):
             "walletId": row["wallet_id"],
             "enabled": bool(row["enabled"]),
             "haircut": row["haircut"],
+            "allowPublicCreation": bool(row.get("allow_public_creation")),
+            "publicLobbyUrl": (
+                "/quakejs/lobby/" + row["public_id"] if row.get("public_id") else ""
+            ),
         }
         if row
-        else {"walletId": "", "enabled": False, "haircut": 5}
+        else {
+            "walletId": "",
+            "enabled": False,
+            "haircut": 5,
+            "allowPublicCreation": False,
+            "publicLobbyUrl": "",
+        }
     )
 
 
@@ -159,6 +224,11 @@ async def get_settings(key: WalletTypeInfo = Depends(require_admin_key)):
     return {
         "settings": display_settings(await crud.settings_for(key.wallet.user)),
         "maps": MAPS,
+        "server": {
+            "maxMatches": manager.max_matches,
+            "activeMatches": len(manager.matches),
+            "canManage": lnbits_settings.is_admin_user(key.wallet.user),
+        },
     }
 
 
@@ -177,12 +247,35 @@ async def put_settings(
         raise HTTPException(
             403, "Choose a Lightning wallet you own with send and receive permissions."
         )
+    saved = await crud.save_settings(
+        key.wallet.user,
+        wallet.source_wallet_id,
+        data.enabled,
+        data.haircut,
+        data.allow_public_creation,
+    )
+    lobby.changed(key.wallet.user)
+    return {"settings": display_settings(saved)}
+
+
+@router.put("/api/v1/server-settings")
+async def put_server_settings(
+    data: ServerSettingsInput, key: WalletTypeInfo = Depends(require_admin_key)
+):
+    if not lnbits_settings.is_admin_user(key.wallet.user):
+        raise HTTPException(403, "Only a server admin can change match capacity.")
+    try:
+        await finish_on_cancel(manager.set_capacity(data.max_matches))
+    except Exception:
+        raise HTTPException(
+            503, "Match capacity could not be saved. Retry shortly."
+        ) from None
     return {
-        "settings": display_settings(
-            await crud.save_settings(
-                key.wallet.user, wallet.source_wallet_id, data.enabled, data.haircut
-            )
-        )
+        "server": {
+            "maxMatches": manager.max_matches,
+            "activeMatches": len(manager.matches),
+            "canManage": True,
+        }
     }
 
 
@@ -219,9 +312,9 @@ async def list_games(
 @router.post("/api/v1/games")
 async def new_game(data: ArenaInput, key: WalletTypeInfo = Depends(require_admin_key)):
     try:
-        return {
-            "game": crud.public_arena(await crud.create_arena(key.wallet.user, data))
-        }
+        game = crud.public_arena(await crud.create_arena(key.wallet.user, data))
+        lobby.changed(key.wallet.user)
+        return {"game": game}
     except ValueError as error:
         raise HTTPException(400, str(error)) from None
 
@@ -267,8 +360,13 @@ async def payouts(arena_id: str, key: WalletTypeInfo = Depends(require_admin_key
         raise HTTPException(404, "Arena not found.")
     return {
         "payouts": await crud.all_rows(
-            "SELECT id,amount,status,error,payment_hash,created_at FROM "
-            "quakejs.payouts WHERE arena_id=:id ORDER BY created_at DESC LIMIT "
+            "SELECT id,kind,amount,status,error,payment_hash,created_at FROM "
+            "(SELECT id,'kill' AS kind,amount,status,error,payment_hash,"
+            "created_at,arena_id FROM quakejs.payouts "
+            "UNION ALL SELECT id,'creator' AS kind,amount,status,error,"
+            "payment_hash,created_at,arena_id FROM quakejs.creator_payouts) "
+            "AS transfers "
+            "WHERE arena_id=:id ORDER BY created_at DESC LIMIT "
             "100",
             id=arena_id,
         )
@@ -276,13 +374,25 @@ async def payouts(arena_id: str, key: WalletTypeInfo = Depends(require_admin_key
 
 
 @router.get("/api/v1/public/{arena_id}")
-async def get_public(arena_id: str, authorization: str | None = Header(default=None)):
+async def get_public(
+    request: Request, arena_id: str, authorization: str | None = Header(default=None)
+):
+    try:
+        limit(("game-read", request.client.host if request.client else ""), 60, 60)
+    except PublicError:
+        raise HTTPException(429, "Too many requests. Please retry shortly.") from None
     try:
         return await crud.public_state(
             arena_id, session(authorization) if authorization else ""
         )
-    except ValueError as error:
+    except PublicError as error:
         raise HTTPException(404, str(error)) from None
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            503, "Arena information is temporarily unavailable."
+        ) from None
 
 
 @router.post("/api/v1/public/{arena_id}/entry")
@@ -294,21 +404,24 @@ async def invoice(
 ):
     token = session(authorization)
     try:
-        limit(
-            ("invoice", request.client.host if request.client else "", arena_id), 12, 60
-        )
+        # Bound invoice work across all arenas, not just each chosen arena.
+        limit(("invoice", request.client.host if request.client else ""), 12, 60)
         # An unpaid visitor must not be able to occupy a native engine slot.
         manager.check_available(arena_id)
         if (
             arena_id not in manager.matches
             and len(manager.matches) >= manager.max_matches
         ):
-            raise ValueError("The game server is at capacity. Try again later.")
+            raise PublicError("The game server is at capacity. Try again later.")
         result = await create_entry(arena_id, token, data)
         await manager.notify(arena_id)
         return result
-    except ValueError as error:
+    except PublicError as error:
         raise HTTPException(409, str(error)) from None
+    except Exception:
+        raise HTTPException(
+            503, "Entry preparation is temporarily unavailable. Retry shortly."
+        ) from None
 
 
 class Connection:
@@ -320,6 +433,15 @@ class Connection:
         self.match = None
         self.life = None
         self.overflow = False
+
+    async def detach(self):
+        manager.connections.discard(self)
+        try:
+            if self.match:
+                await self.match.detach(self)
+            await manager.notify(self.arena_id)
+        except Exception:
+            logger.warning("QuakeJS disconnect cleanup deferred to journal recovery.")
 
     def offer(self, message):
         if self.queue.full():
@@ -350,7 +472,9 @@ class Connection:
             self.offer(
                 {
                     "type": "state",
-                    "data": await crud.public_state(self.arena_id, self.token),
+                    "data": await finish_on_cancel(
+                        crud.public_state(self.arena_id, self.token)
+                    ),
                 }
             )
             await asyncio.sleep(0.05)
@@ -376,7 +500,7 @@ class Connection:
                     await self.match.send(bytes([2, self.life["slot"]]) + payload)
                 continue
             data = message_object(message.get("text", "{}"))
-            await self.message(data)
+            await finish_on_cancel(self.message(data))
 
     async def message(self, data):
         if data.get("type") == "ping":
@@ -386,13 +510,23 @@ class Connection:
                 limit(("admit", self.token), 10, 10)
                 state = await crud.public_state(self.arena_id, self.token)
                 if not state["player"] or state["player"]["livesRemaining"] <= 0:
-                    raise ValueError("A paid entry is required.")
+                    raise PublicError("A paid entry is required.")
                 match = await manager.ensure(self.arena_id)
                 life = await match.attach(self)
                 self.offer({"type": "admitted", "life": life["id"]})
                 await manager.notify(self.arena_id)
-            except ValueError as error:
+            except PublicError as error:
                 self.offer({"type": "error", "message": str(error)})
+            except Exception:
+                self.offer(
+                    {
+                        "type": "error",
+                        "message": (
+                            "Arena admission is temporarily unavailable. "
+                            "Your paid lives are saved."
+                        ),
+                    }
+                )
         elif data.get("type") == "refresh":
             limit(("refresh", self.token), 5, 10)
             self.dirty.set()
@@ -432,7 +566,7 @@ async def websocket(websocket: WebSocket, arena_id: str):
         data = message_object(hello)
         token = data.get("token", "")
         crud.token_hash(token)
-        await crud.public_state(arena_id, token)
+        await finish_on_cancel(crud.public_state(arena_id, token))
         connection = Connection(websocket, arena_id, token)
         manager.connections.add(connection)
         tasks = [
@@ -442,28 +576,183 @@ async def websocket(websocket: WebSocket, arena_id: str):
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             task.result()
-    except (
-        ValueError,
-        TypeError,
-        KeyError,
-        asyncio.TimeoutError,
-        WebSocketDisconnect,
-        RuntimeError,
-    ):
-        pass
+    except Exception:
+        # Never allow framework debug responses to expose a failed query or token.
+        logger.debug("QuakeJS player connection closed.")
     finally:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         try:
             if connection:
-                manager.connections.discard(connection)
-                if connection.match:
-                    await connection.match.detach(connection)
-                await manager.notify(arena_id)
+                await connection.detach()
         finally:
             socket_slots.pop(reservation, None)
             try:
                 await websocket.close()
             except RuntimeError:
                 pass
+
+
+@router.get("/lobby/{public_id}", name="quakejs_public_lobby")
+async def public_lobby(request: Request, public_id: str):
+    try:
+        await lobby.setting_for(public_id)
+    except lobby.LobbyError:
+        raise HTTPException(404, "This public lobby is unavailable.") from None
+    except Exception:
+        raise HTTPException(
+            503, "The public lobby is temporarily unavailable."
+        ) from None
+    return renderer.TemplateResponse(
+        "quakejs/lobby.html",
+        {
+            "request": request,
+            "public_id": public_id,
+            "share_url": str(
+                request.url_for("quakejs_public_lobby", public_id=public_id)
+            ),
+            "share_image": str(request.base_url) + "quakejs/static/share/lobby.png?v=1",
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "frame-ancestors 'self'; object-src 'none'; base-uri 'none'"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/api/v1/lobby/{public_id}")
+async def lobby_state(
+    request: Request, public_id: str, page: int = Query(1, ge=1, le=100000)
+):
+    try:
+        limit(("lobby-read", request.client.host if request.client else ""), 60, 60)
+    except ValueError:
+        raise HTTPException(429, "Too many requests. Please retry shortly.") from None
+    try:
+        return await lobby.snapshot(public_id, page)
+    except lobby.LobbyError as error:
+        raise HTTPException(400, str(error)) from None
+    except Exception:
+        raise HTTPException(
+            503, "The public lobby is temporarily unavailable."
+        ) from None
+
+
+@router.post("/api/v1/lobby/{public_id}/games")
+async def public_new_game(request: Request, public_id: str, data: PublicArenaInput):
+    # This is deliberately unauthenticated; no wallet key is accepted or needed.
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):
+        raise HTTPException(403, "Cross-origin game creation is not allowed.")
+    try:
+        limit(("public-create", request.client.host if request.client else ""), 5, 60)
+    except ValueError:
+        raise HTTPException(429, "Too many requests. Please retry shortly.") from None
+    try:
+        return {"game": await lobby.create_game(public_id, data)}
+    except lobby.LobbyError as error:
+        raise HTTPException(400, str(error)) from None
+    except Exception:
+        raise HTTPException(
+            503, "Game creation is temporarily unavailable. Retry shortly."
+        ) from None
+
+
+class LobbyConnection:
+    def __init__(self, websocket, public_id):
+        self.websocket = websocket
+        self.public_id = public_id
+        self.event = asyncio.Event()
+        self.page = 1
+
+    async def write(self):
+        while True:
+            try:
+                await asyncio.wait_for(self.event.wait(), 15)
+            except asyncio.TimeoutError:
+                pass
+            self.event.clear()
+            data = await finish_on_cancel(lobby.snapshot(self.public_id, self.page))
+            with fail_after(5):
+                await self.websocket.send_json(data)
+            await asyncio.sleep(1)
+
+    async def read(self):
+        while True:
+            text = await asyncio.wait_for(self.websocket.receive_text(), 45)
+            if len(text) > 100:
+                raise ValueError("Invalid lobby message.")
+            limit(("lobby-message", self), 15, 30)
+            data = message_object(text)
+            if data.get("type") == "ping":
+                continue
+            if (
+                data.get("type") != "page"
+                or type(data.get("page")) is not int
+                or not 1 <= data["page"] <= 100000
+            ):
+                raise ValueError("Invalid lobby message.")
+            self.page = data["page"]
+            self.event.set()
+
+
+@router.websocket("/api/v1/lobby/{public_id}/ws")
+async def lobby_socket(websocket: WebSocket, public_id: str):
+    origin = urlsplit(websocket.headers.get("origin", ""))
+    if origin.netloc != websocket.headers.get("host") or origin.scheme not in (
+        "http",
+        "https",
+    ):
+        await websocket.close(code=1008)
+        return
+    ip = websocket.client.host if websocket.client else ""
+    reservation = None
+    connection = LobbyConnection(websocket, public_id)
+    event = connection.event
+    owner = None
+    tasks = []
+    try:
+        limit(("connect", ip), 30, 60)
+        if (
+            len(socket_slots) >= MAX_SOCKETS
+            or sum(host == ip for host in socket_slots.values()) >= MAX_SOCKETS_PER_IP
+        ):
+            await websocket.close(code=1013)
+            return
+        reservation = object()
+        socket_slots[reservation] = ip
+        setting = await finish_on_cancel(lobby.setting_for(public_id))
+        owner = setting["id"]
+        lobby.listeners.setdefault(owner, set()).add(event)
+        await websocket.accept()
+        event.set()
+
+        tasks = [
+            asyncio.create_task(connection.write()),
+            asyncio.create_task(connection.read()),
+        ]
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
+    except Exception:
+        # Never echo DB failures, provider errors, or request contents to visitors.
+        logger.debug("QuakeJS public lobby connection closed.")
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        socket_slots.pop(reservation, None)
+        limits.pop(("lobby-message", connection), None)
+        if owner:
+            lobby.listeners.get(owner, set()).discard(event)
+            if not lobby.listeners.get(owner):
+                lobby.listeners.pop(owner, None)
+        try:
+            await websocket.close(code=1008)
+        except RuntimeError:
+            pass

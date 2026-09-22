@@ -6,6 +6,7 @@ from loguru import logger
 from lnbits.task_manager import task_manager
 
 from .crud import db, settle_entry
+from .lobby import maintenance
 from .payments import payout_loop, reconcile_entries
 from .server import manager
 from .views import router
@@ -37,6 +38,7 @@ def quakejs_start():
             manager.loop(),
             payout_loop(manager.notify),
             reconcile_entries(manager.notify),
+            maintenance(),
         )
     )
 

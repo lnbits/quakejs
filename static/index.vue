@@ -15,6 +15,27 @@
               :disable="saving || !canSave"
               @update:model-value="toggleEnabled"
             ></q-toggle>
+            <q-toggle
+              :model-value="settings.allowPublicCreation"
+              label="Allow public game creation"
+              :disable="saving || !canSave"
+              @update:model-value="togglePublicCreation"
+              ><q-tooltip
+                >creates a public page that can be used to create
+                games</q-tooltip
+              ></q-toggle
+            >
+            <div v-if="settings.allowPublicCreation && settings.publicLobbyUrl">
+              <q-btn
+                flat
+                color="primary"
+                icon="open_in_new"
+                label="Open public lobby"
+                :href="settings.publicLobbyUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+              ></q-btn>
+            </div>
             <q-select
               v-model="settings.walletId"
               :options="walletOptions"
@@ -29,15 +50,15 @@
               v-model.number="settings.haircut"
               type="number"
               min="0"
-              max="100"
+              max="50"
               step="1"
               label="Service fee (%)"
               filled
               dense
               :rules="[
                 value =>
-                  (Number.isInteger(value) && value >= 0 && value <= 100) ||
-                  'Enter a whole percentage from 0 to 100'
+                  (Number.isInteger(value) && value >= 0 && value <= 50) ||
+                  'Enter a whole percentage from 0 to 50'
               ]"
             ></q-input>
             <div v-if="!wallets.length" class="text-caption">
@@ -50,6 +71,43 @@
               label="Save settings"
               :loading="saving"
               :disable="!canSave"
+            ></q-btn>
+          </q-form>
+        </q-card-section>
+      </q-card>
+      <q-card v-if="server.canManage">
+        <q-card-section>
+          <h6 class="text-subtitle1 q-my-none">Server capacity</h6>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <q-form @submit="saveCapacity" class="q-gutter-md">
+            <q-input
+              v-model.number="server.maxMatches"
+              type="number"
+              min="1"
+              max="32"
+              step="1"
+              label="Maximum simultaneous matches"
+              filled
+              dense
+              :rules="[
+                value =>
+                  (Number.isInteger(value) && value >= 1 && value <= 32) ||
+                  'Enter a whole number from 1 to 32'
+              ]"
+            ></q-input>
+            <p class="text-caption">
+              {{ server.activeMatches }} running · Up to eight players per match.
+              This limit covers all QuakeJS arenas on this server. Lowering it
+              leaves existing matches running and prevents new matches from
+              starting until capacity is available. Empty servers stop after
+              five minutes; stored lobby games do not each occupy a server slot.
+            </p>
+            <q-btn
+              type="submit"
+              color="primary"
+              label="Save capacity"
+              :loading="savingCapacity"
             ></q-btn>
           </q-form>
         </q-card-section>
@@ -248,16 +306,16 @@
         <q-input
           v-model.number="gameForm.joinAmount"
           type="number"
-          min="50"
+          min="100"
           max="1000000"
           step="1"
-          label="Entry sats for 5 lives (minimum 50)"
+          label="Entry sats for 5 lives (minimum 100)"
           filled
           dense
           :rules="[
             value =>
-              (Number.isInteger(value) && value >= 50 && value <= 1000000) ||
-              'Enter 50 to 1,000,000 whole sats'
+              (Number.isInteger(value) && value >= 100 && value <= 1000000) ||
+              'Enter 100 to 1,000,000 whole sats'
           ]"
         ></q-input>
         <q-select

@@ -8,7 +8,11 @@ from bolt11 import Bolt11, Tag, TagChar, Tags, encode
 
 from lnbits.db import Database
 from lnbits.extensions.quakejs import crud, payments
-from lnbits.extensions.quakejs.migrations import m007_native_arena_ledger
+from lnbits.extensions.quakejs.migrations import (
+    m007_native_arena_ledger,
+    m009_public_lobbies,
+    m010_server_capacity,
+)
 from lnbits.extensions.quakejs.models import ArenaInput, EntryInput
 from lnbits.settings import settings
 
@@ -24,12 +28,17 @@ async def arena(tmp_path, monkeypatch):
     database = Database("ext_quakejs")
     monkeypatch.setattr(crud, "db", database)
     await m007_native_arena_ledger(database)
+    await m009_public_lobbies(database)
+    await m010_server_capacity(database)
     await crud.save_settings("owner", "wallet", True, 5)
-    row = await crud.create_arena("owner", ArenaInput(joinAmount=50))
+    row = await crud.create_arena("owner", ArenaInput(joinAmount=100))
+    # Keep exercising existing 50-sat games after raising the creation minimum.
+    row["entry_amount"] = 50
     run = crud.uid()
     async with crud.transaction() as tx:
         await tx.execute(
-            "UPDATE quakejs.arenas SET run_id=:run,lease_until=:until WHERE id=:id",
+            "UPDATE quakejs.arenas SET entry_amount=50,run_id=:run,"
+            "lease_until=:until WHERE id=:id",
             id=row["id"],
             run=run,
             until=crud.now() + 300,
@@ -455,7 +464,7 @@ async def test_recover_only_unsent_invoice_failures(arena, status, has_invoice, 
 
 @pytest.mark.anyio
 async def test_old_run_cleanup_preserves_replacement_lease(arena, tmp_path):
-    from lnbits.extensions.quakejs.server import Match
+    from lnbits.extensions.quakejs.server import Manager, Match
 
     manager = SimpleNamespace(directory=tmp_path, worker="test-worker")
     old = Match(manager, arena, arena["run_id"])
@@ -470,6 +479,8 @@ async def test_old_run_cleanup_preserves_replacement_lease(arena, tmp_path):
             until=crud.now() + 45,
             id=arena["id"],
         )
+    with pytest.raises(ValueError, match="lease ended"):
+        await Manager.renew(manager, old, arena["id"])
     await old.stop()
     current = await crud.one(
         "SELECT * FROM quakejs.arenas WHERE id=:id", id=arena["id"]
@@ -640,6 +651,61 @@ async def test_pending_invoices_reserve_capacity(arena):
             crud.uid(),
             EntryInput(lnAddress="player@example.com", nonce=crud.uid()),
         )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("recovery", ["stop", "restart"])
+async def test_long_journal_recovers_unsettled_tail(
+    arena, tmp_path, monkeypatch, recovery
+):
+    import json
+
+    from lnbits.extensions.quakejs.server import Manager, Match
+
+    victim_token, _, _ = await paid(arena)
+    killer_token, _, _ = await paid(arena)
+    victim = await crud.allocate_life(arena["id"], victim_token, arena["run_id"])
+    killer = await crud.allocate_life(arena["id"], killer_token, arena["run_id"])
+    # Model a long, already settled prefix plus one fsynced but unsettled death.
+    async with crud.transaction() as tx:
+        await tx.execute(
+            "UPDATE quakejs.runs SET event_sequence=512 WHERE id=:id",
+            id=arena["run_id"],
+        )
+        if recovery == "restart":
+            await tx.execute(
+                "UPDATE quakejs.arenas SET lease_until=0 WHERE id=:id", id=arena["id"]
+            )
+    journal = tmp_path / (arena["run_id"] + ".jsonl")
+    events = [
+        {"sequence": sequence, "victim": crud.uid(), "killer": ""}
+        for sequence in range(1, 513)
+    ]
+    events.append({"sequence": 513, "victim": victim["id"], "killer": killer["id"]})
+    journal.write_text("".join(json.dumps(event) + "\n" for event in events))
+    manager = Manager()
+    manager.directory = tmp_path
+    manager.running = True
+
+    async def fake_start(self):
+        self.journal.touch()
+
+    if recovery == "restart":
+        monkeypatch.setattr(Match, "start", fake_start)
+        match = await manager.ensure(arena["id"])
+        await match.stop()
+    else:
+        match = Match(manager, arena, arena["run_id"])
+        await match.stop()
+        await match.stop()
+    run = await crud.one("SELECT * FROM quakejs.runs WHERE id=:id", id=arena["run_id"])
+    assert run["event_sequence"] == 513
+    assert run["status"] == ("recovered" if recovery == "restart" else "stopped")
+    assert (await crud.public_state(arena["id"], victim_token))["player"][
+        "livesRemaining"
+    ] == 4
+    payouts = await crud.all_rows("SELECT * FROM quakejs.payouts")
+    assert len(payouts) == 1 and payouts[0]["amount"] == 9
 
 
 @pytest.mark.anyio
@@ -842,3 +908,87 @@ async def test_bad_journal_does_not_stop_other_matches(arena, monkeypatch):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.anyio
+async def test_bad_address_exhausts_retries_without_blocking_respawn(
+    arena, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    from lnurl import LnurlResponseException
+
+    victim_token, _, _ = await paid(arena)
+    killer_token, _, _ = await paid(arena)
+    victim = await crud.allocate_life(arena["id"], victim_token, arena["run_id"])
+    killer = await crud.allocate_life(arena["id"], killer_token, arena["run_id"])
+    await crud.consume_death(arena["run_id"], 1, victim["id"], killer["id"])
+    row = await payments.claim_payout()
+    monkeypatch.setattr(
+        payments,
+        "get_pr_from_lnurl",
+        AsyncMock(
+            side_effect=LnurlResponseException(
+                "private provider error with token=secret"
+            )
+        ),
+    )
+    send = AsyncMock()
+    monkeypatch.setattr(payments, "pay_invoice", send)
+    for _ in range(8):
+        await payments.process_payout(row)
+    assert row["status"] == "failed"
+    assert row["attempts"] == 8
+    assert "secret" not in row["error"]
+    send.assert_not_awaited()
+    assert (await crud.public_state(arena["id"], killer_token))["won"] == 0
+    respawn = await crud.allocate_life(arena["id"], victim_token, arena["run_id"])
+    assert respawn["status"] == "alive"
+    assert (await crud.public_state(arena["id"], victim_token))["player"][
+        "livesRemaining"
+    ] == 4
+
+
+@pytest.mark.anyio
+async def test_unexpected_payout_failure_yields_to_other_recipients(arena, monkeypatch):
+    tokens = [(await paid(arena))[0] for _ in range(3)]
+    lives = [
+        await crud.allocate_life(arena["id"], token, arena["run_id"])
+        for token in tokens
+    ]
+    await crud.consume_death(arena["run_id"], 1, lives[0]["id"], lives[2]["id"])
+    await crud.consume_death(arena["run_id"], 2, lives[1]["id"], lives[2]["id"])
+    calls, completed = [], asyncio.Event()
+
+    async def process(row):
+        calls.append(row["id"])
+        if len(calls) == 1:
+            raise TimeoutError("fixture: provider operation exceeded worker deadline")
+        await payments.update_payout(row, "paid")
+
+    async def notify(_):
+        completed.set()
+
+    monkeypatch.setattr(payments, "process_payout", process)
+    task = asyncio.create_task(payments.payout_loop(notify))
+    try:
+        await asyncio.wait_for(completed.wait(), 5)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert len(calls) == 2 and calls[0] != calls[1]
+    failed = await crud.one("SELECT * FROM quakejs.payouts WHERE id=:id", id=calls[0])
+    assert failed["status"] == "queued"  # No transfer was attempted.
+    assert failed["claimed_until"] == 0
+    assert failed["next_attempt"] > crud.now()
+    # If another retry and a fresh payout are due together, the fresh work wins.
+    async with crud.transaction() as tx:
+        await tx.execute(
+            "UPDATE quakejs.payouts SET next_attempt=1 WHERE id=:id", id=calls[0]
+        )
+        await tx.execute(
+            "UPDATE quakejs.payouts SET status='queued',next_attempt=0,"
+            "claimed_until=0 WHERE id=:id",
+            id=calls[1],
+        )
+    assert (await payments.claim_payout())["id"] == calls[1]

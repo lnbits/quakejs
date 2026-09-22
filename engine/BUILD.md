@@ -53,3 +53,19 @@ The corresponding source archive includes the modified tree. Build that tree
 directly; do not apply the patches a second time. For the original browser build,
 see `browser-BUILD.md`; the native game QVM additionally removes projectiles when
 their owner leaves. Repackage corresponding source after every engine change.
+
+## Map selection
+
+Arenas offer `aggressor`, `oa_dm7`, `oa_minia`, `czest1dm`, `oa_shine` and `kaos2`.
+To reproduce the map-pack update from the release pinned in `source.json`, run:
+
+    python engine/update-maps.py /path/to/openarena-0.8.8.zip
+
+The script verifies the upstream archive hash, applies patch packs in load order,
+replaces the map BSP/AAS files and level previews, includes referenced music, and
+updates the loader size/hash. It preserves the patched game VMs. It updates the
+game pack, not the native executable. OA DM1 and OA DM2 are no longer included.
+
+The same build applies the four wall-logo placements in `logos/placements.json`
+and embeds the supplied logo textures and shader. See `logos/README.md` for the
+editable inputs and rendering-only changes.

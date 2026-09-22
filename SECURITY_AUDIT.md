@@ -92,3 +92,185 @@ potentially sent payments. Pending and failed winnings are shown separately from
 paid winnings. `make check` passes 52 tests including these regression cases.
 Live provider diagnostics were not run: automatic approval review rejected
 sending stored payout addresses and amounts to external diagnostic endpoints.
+
+## Final release pass — version 1.0.4
+
+- Fixed incomplete crash recovery for journals longer than one 256-event batch.
+  Shutdown and recovery now drain all batches before marking a run recovered or
+  releasing its funded lives. Tests model 512 previously settled events followed
+  by an unsettled payable death, including repeated cleanup without double pay.
+- Lease renewal now checks the exact run ID as well as worker ownership, so an
+  obsolete match cannot renew a replacement's lease.
+- The game loader recovers from a cached Git LFS pointer or truncated response
+  with one fresh request, retaining the exact size and SHA256 checks. Persistent
+  missing game data produces an explicit server-installation error.
+- Release packaging rejects LFS pointer files, missing required assets, engine or
+  game-pack manifest mismatches, symlinks and accidental environment/key/database/
+  log files. It verifies all four maps and three game VMs are present, checks ZIP
+  integrity, and replaces the release ZIP only after successful verification.
+- `make check` passes 75 Python tests and five JavaScript loader tests; `make smoke`
+  starts all four maps, and `make sandbox-check` passes the native syscall probe.
+- Two real local browser clients passed entry, respawn, one authoritative 9-sat
+  frag payout, pending winnings display and exactly-once disconnect/timeout life
+  consumption. This fixture uses synthetic payments and never contacts a payout
+  provider. The owner separately reports successful gameplay on a VPS.
+
+No payment formula, payout destination, admission fee or database migration was
+changed. The source review is bounded to this extension and its integration;
+PostgreSQL, a full eight-player Internet load test and exhaustive upstream engine
+vulnerability testing remain outside this pass. For any earlier interrupted run
+already marked recovered by an older version with a journal over 256 events,
+retain the journal and reconcile its recorded events before manually adjusting
+balances; this patch does not rewrite historical financial records.
+
+## Public lobby and creator fees — version 1.1.0
+
+- Public creation is opt-in per owner. Anonymous callers cannot set wallet IDs,
+  owner IDs or the admin fee. Creator percentages are strict integers and combined
+  fees cannot exceed 100%. Addresses use the existing validated LNURL payout path.
+- Arena creation locks the owner's settings row, snapshots its wallet and fees,
+  bounds active/recent games and uses a unique owner/nonce constraint for retries.
+  HTTP creation is rate-limited and browser cross-origin requests are rejected.
+- Each authoritative kill records the life deduction, winner payout and creator
+  payout in one transaction. Both payout types have unique victim constraints,
+  leased processing, uncertain-payment reconciliation and a shared invoice-hash
+  reservation table. Creator payment failures do not block funded respawns.
+- Public responses select only public arena fields. Scoreboards deliberately
+  disclose full winner addresses, as requested, and include only paid kill
+  winnings. The UI states this before entry. Creator destinations, wallet IDs,
+  entry tokens, invoice hashes and admin keys are excluded from lobby responses.
+- Public text uses DOM textContent and template escaping. Only explicitly marked
+  validation errors are returned to visitors; unexpected exceptions produce fixed
+  generic errors. WebSockets enforce origin, connection/message limits, bounded
+  page sizes, send/read timeouts and cleanup on disconnect or lobby disablement.
+- Expiry uses the same arena lock as admission and settlement. It exempts admin
+  games and preserves paid lives and live invoices. Financial ledgers are retained
+  for outstanding payouts and delayed settlement can restore an expired arena.
+- Migration 9 preserves existing payment states and reserves their invoice hashes;
+  interrupted migration retries keep existing lobby URLs and records unchanged.
+
+Verification includes SQLite concurrent creation/death events, fee arithmetic,
+creator payout timeout reconciliation without resending, cross-outbox invoice
+reuse rejection, owner isolation, expiry exemptions, delayed payment recovery,
+interrupted migration recovery, error redaction and WebSocket lifecycle tests.
+`make check` passes 92 Python tests and five asset-loader JavaScript tests;
+`make smoke` starts all four maps. A local Chromium fixture verified the admin
+toggle, tooltip and link, anonymous creation, live updates in another lobby tab,
+literal rendering of an HTML-injection test title, mobile layout, and disablement.
+The lobby downloaded no engine/game packs and stored no wallet keys.
+Real creator Lightning transfers, PostgreSQL and Internet load testing remain
+unverified; synthetic tests do not establish those deployment limits.
+
+The updated public share metadata and six-map selection pass `make check`
+(93 Python tests and five loader tests). `make smoke` starts Aggressor, OA DM7,
+OA Minia, Czest1dm, OA Shine and Kaos 2. Chromium also verified OA DM7 entry,
+the lobby card URL, six map options and the bottom credit at desktop/mobile sizes.
+
+The wall-logo build adds exactly two instances of each supplied logo per map.
+`make check` passes 96 Python tests and five loader tests, including decal counts,
+lossless RGBA conversion, bounds validation and preservation of collision and
+submodel data. All six branded maps pass `make smoke`. The original map entities,
+collision lumps, lighting and visibility data were also compared directly against
+the pinned release. Decals add no runtime permissions, endpoints or game rules.
+
+## Public navigation, disclosures and error isolation follow-up
+
+- Game dialogs now link to “Go to lobby/create new game”; invoice dialogs hide
+  that link. The lobby exposes a link for every active listed arena, including
+  full arenas, with live player counts. Both the listing and the Lightning-address
+  entry dialog show admin, creator and combined percentages and net kill winnings.
+- Player HTTP/admission paths previously echoed any `ValueError`, including an
+  unexpected internal failure. Only explicitly designated fixed `PublicError`
+  messages now cross that boundary. Unexpected public HTTP errors (including
+  HTML/share rendering) produce a generic, non-cacheable 503 even with debug mode
+  enabled. Unexpected admission errors do not echo credentials or provider data.
+- Invoice rate limits now apply across arenas per client IP, preventing a visitor
+  from bypassing the limit by changing arena IDs. Anonymous game-state reads are
+  also limited. Existing socket limits, ownership checks, arena-scoped session
+  hashes, atomic admission/death accounting and outbox identity checks remain.
+- The lobby connects its WebSocket after an initial HTTP failure and disables
+  creation while disconnected, then restores it from a fresh server snapshot.
+
+`make check` passes 110 Python tests and five JavaScript asset tests, including
+new debug-mode secret-redaction, cross-arena invoice-limit and in-flight ledger
+cancellation regressions.
+Chromium verified lobby recovery from an injected 503, literal rendering of an
+HTML-injection title, fee disclosures, join/full-arena links, hidden invoice
+navigation and a 390px layout. Eight isolated browser sessions joined Kaos 2
+using fake invoices; a one-minute movement/fire sample retained all eight
+connections with no browser errors. This was a local capacity sample, not an
+Internet stress test or real Lightning settlement test. See `CAPACITY.md`.
+
+Remaining boundaries still apply: unpaid invoice reservations can temporarily
+occupy arena admission capacity, application limits cannot prevent distributed
+floods, native engine compromise is a trust boundary, and modified clients can
+use aim assistance or collude. LNURL network safety depends on the existing
+LNbits helper and keeping private-IP LNURL requests disabled. No core changes or
+new runtime dependencies were needed for this follow-up.
+
+The first eight-browser simultaneous disconnect exposed a SQLite lock during
+cleanup. A subsequent unpatched reproduction did not repeat it, so its exact
+cause was not conclusively isolated. Disconnect handling now waits for in-flight
+state/admission/lobby ledger operations to finish before detachment rather than
+cancelling database work. Tests verify that all three paths finish before the
+caller observes cancellation. Cleanup failures keep diagnostics generic and
+leave durable journal recovery to the supervisor. This strengthens the observed
+failure boundary; it is not proof that every possible SQLite contention source
+has been eliminated.
+
+The patched eight-browser disconnect run completed without a database error.
+Its ledger recorded eight dead lives and 32 remaining lives: exactly one consumed
+per player, with four retained each.
+
+## Administrator-selected match cap
+
+Server capacity is now saved in a singleton extension table (migration 10), with
+a default of four and validated integer bounds of 1–32. Only authenticated
+LNbits server-admin wallet owners may change it; ordinary arena owners and public
+visitors cannot allocate a larger server-wide budget. Updates serialize with
+engine creation, persist before becoming effective, and never stop existing
+matches when a cap is lowered. Startup loads the saved cap. The previous
+environment-only setting is replaced by the backend's Server capacity card.
+
+The 110-test suite includes unauthorized updates, strict input validation,
+persistence, repeated schema initialization and lowering below the live count.
+The m.16 estimates distinguish its 1.5-core baseline, six-vCPU burst ceiling and
+the possible single-worker supervisor bottleneck; no multi-match VPS capacity is
+claimed as measured. An administrator choosing a higher cap accepts the resource
+budget; the limit does not reserve CPU, bandwidth or provider burst credits.
+
+Chromium verified the capacity form inside the normal LNbits admin shell,
+changing four to twelve and retaining it after page reload. A fresh supervisor
+process also loaded twelve from the isolated test database. Production settings
+were not changed by these fixtures.
+
+Files touched in this follow-up: `views.py`, `models.py`, `crud.py`, `payments.py`,
+`server.py`, `migrations.py`; `static/admin.js`, `static/index.vue`,
+`static/public.js`, `static/lobby.js`; `templates/quakejs/public.html` and
+`templates/quakejs/lobby.html`; the existing corresponding-source bundle;
+`tests/test_routes.py`, `tests/test_lobby.py`, `tests/test_ledger.py`,
+`tests/smoke.py`; `README.md`, `CAPACITY.md` and this review. LNbits core is
+unchanged. Browser fixtures and measurements live in the ignored `dev/` folder.
+
+## Payout failure isolation follow-up
+
+Failed payouts no longer add an error message to the public gameplay HUD. The
+admin ledger retains the failure, and only confirmed payments count as winnings.
+Invoice lookup retries remain bounded; uncertain sends still reconcile their
+original hash without automatically sending again.
+
+The worker now postpones overdue work after an unexpected exception or deadline
+and prioritizes fresh payouts over due retries. Regression tests cover exhausted
+address lookups without blocking funded respawns, redaction of provider secrets,
+and an unexpected payout failure yielding to another recipient. These use fake
+providers and isolated ledgers; no live Lightning transfers were made.
+
+## Fee cap follow-up
+
+New games now limit combined admin and creator percentages to 50% of each life's
+value. Input models reject fees outside 0–50 and non-integer values; the public
+creation transaction also checks the sum against the stored admin fee. Settings
+writes and admin game creation enforce the admin limit. The forms mirror these
+limits, but backend validation does not depend on them. Boundary tests cover
+0+50, 5+45 and 50+0, rejecting larger totals without inserting a game. Existing
+games and already-funded payment terms are not rewritten.

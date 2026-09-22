@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>{{ game.name }} · QuakeJS Arena</title>
     <meta name="description" content="{{ share_description }}" />
     <link rel="canonical" href="{{ share_url }}" />
@@ -64,9 +64,12 @@
         <pre id="source-instructions"></pre>
         <pre id="license-text"></pre>
       </details>
+            <p id="public-lobby-note" class="fine" hidden>Paid kill winnings and Lightning addresses appear on this lobby’s public scoreboard.</p>
+            <p class="fine"><a id="create-new-game" hidden>Go to lobby/create new game</a></p>
           </div>
         </div>
       <aside><ol id="roster" aria-label="Players"></ol><ol id="feed" aria-label="Arena activity" aria-live="polite"></ol></aside>
+      <footer id="powered-by">POWERED BY LNBITS</footer>
       </section>
     </main>
     <script src="/quakejs/static/client.js"></script>

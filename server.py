@@ -14,7 +14,7 @@ from loguru import logger
 from lnbits.settings import settings
 
 from . import crud
-from .models import MAPS, MAX_PLAYERS
+from .models import MAPS, MAX_PLAYERS, PublicError
 
 ROOT = Path(__file__).resolve().parent
 
@@ -23,7 +23,7 @@ def prepare_binary():
     binary = ROOT / "bin" / "linux-x86_64" / "ioq3ded"
     manifest = json.loads(binary.with_name("manifest.json").read_text())
     if hashlib.sha256(binary.read_bytes()).hexdigest() != manifest["sha256"]:
-        raise ValueError("The packaged game engine failed its integrity check.")
+        raise PublicError("The packaged game engine failed its integrity check.")
     # Python's ZipFile extraction does not retain executable permissions.
     # Set only the owner's execute bit on this verified, bundled executable.
     mode = binary.stat().st_mode
@@ -144,7 +144,7 @@ class Match:
         self.reader = asyncio.create_task(self.receive())
         await asyncio.wait_for(self.ready.wait(), 30)
         if self.closed or self.process.returncode is not None:
-            raise ValueError("The game server could not start.")
+            raise PublicError("The game server could not start.")
 
     async def capture_output(self):
         # Keep startup diagnostics; drain excess chat without growing log files.
@@ -159,14 +159,14 @@ class Match:
 
     async def send(self, data):
         if self.closed or not self.socket:
-            raise ValueError("The game server is restarting.")
+            raise PublicError("The game server is restarting.")
         # SEQPACKET writes are atomic. No unbounded socket buffer or send queue.
         try:
             if self.socket.send(data) != len(data):
                 raise RuntimeError("Incomplete engine packet.")
         except BlockingIOError:
             if data[0] != 2:
-                raise ValueError("Game server is busy. Please retry.") from None
+                raise PublicError("Game server is busy. Please retry.") from None
 
     async def control(self, data):
         key = (data[0], data[1])
@@ -243,6 +243,13 @@ class Match:
             changed = True
         return changed
 
+    async def drain_journal(self):
+        # Recovery starts at byte zero, including events already in the ledger.
+        # A stopped engine cannot append more events, so drain every batch before
+        # releasing its lives or marking its run recovered.
+        while await self.replay():
+            pass
+
     async def attach(self, connection):
         async with self.lock:
             await self.replay()
@@ -251,7 +258,7 @@ class Match:
                 c.token == connection.token and c is not connection
                 for c in self.peers.values()
             ):
-                raise ValueError("This player is already connected in another tab.")
+                raise PublicError("This player is already connected in another tab.")
             if connection.life:
                 row = await crud.one(
                     "SELECT status FROM quakejs.lives WHERE id=:id",
@@ -271,7 +278,7 @@ class Match:
                 self.closed = True
                 self.socket.close()
                 # The manager observes closed and recovers the unused life.
-                raise ValueError("Game server is restarting. Please retry.") from None
+                raise PublicError("Game server is restarting. Please retry.") from None
             connection.life, connection.match = life, self
             self.peers[life["slot"]] = connection
             self.last_used = crud.now()
@@ -314,7 +321,7 @@ class Match:
             self.reader.cancel()
             await asyncio.gather(self.reader, return_exceptions=True)
         async with self.lock:
-            await self.replay()
+            await self.drain_journal()
             async with crud.transaction() as tx:
                 await tx.lock_arena(self.arena["id"], active=False)
                 await tx.execute(
@@ -351,16 +358,21 @@ class Manager:
         self.connections = set()
         self.lock = asyncio.Lock()
         self.running = False
-        self.max_matches = max(1, min(32, int(os.getenv("QUAKEJS_MAX_MATCHES", "4"))))
+        self.max_matches = 4
         self.worker_lock = None
 
     def check_available(self, arena_id):
         if not self.running:
-            raise ValueError("QuakeJS is starting. Please retry shortly.")
+            raise PublicError("QuakeJS is starting. Please retry shortly.")
         if arena_id in self.blocked:
-            raise ValueError("This arena's ledger needs owner review.")
+            raise PublicError("This arena's ledger needs owner review.")
         if platform.system() != "Linux" or platform.machine() != "x86_64":
-            raise ValueError("This package requires a Linux x86-64 server.")
+            raise PublicError("This package requires a Linux x86-64 server.")
+
+    async def set_capacity(self, maximum):
+        async with self.lock:
+            await crud.save_server_capacity(maximum)
+            self.max_matches = maximum
 
     async def ensure(self, arena_id):
         async with self.lock:
@@ -370,14 +382,14 @@ class Manager:
             if arena_id in self.matches:
                 await self.matches.pop(arena_id).stop()
             if len(self.matches) >= self.max_matches:
-                raise ValueError("The game server is at capacity. Try again later.")
+                raise PublicError("The game server is at capacity. Try again later.")
             run = crud.uid()
             async with crud.transaction() as tx:
                 arena = await tx.lock_arena(arena_id)
                 if arena["map"] not in {m["value"] for m in MAPS}:
-                    raise ValueError("Map not installed.")
+                    raise PublicError("Map not installed.")
                 if arena["lease_until"] > crud.now():
-                    raise ValueError(
+                    raise PublicError(
                         "This arena is served by another worker. "
                         "Use a single LNbits worker."
                     )
@@ -397,7 +409,7 @@ class Manager:
                 )
             for old in old_runs:
                 recovered = Match(self, arena, old["id"])
-                await recovered.replay()
+                await recovered.drain_journal()
                 async with crud.transaction() as tx:
                     await tx.execute(
                         "UPDATE quakejs.lives SET "
@@ -426,7 +438,7 @@ class Manager:
                 await match.stop()
                 self.matches.pop(arena_id, None)
                 logger.warning("QuakeJS dedicated server failed to start: {}", run)
-                raise ValueError(
+                raise PublicError(
                     "Game server unavailable. No entry payment is needed; contact "
                     "the arena owner."
                 ) from None
@@ -436,6 +448,17 @@ class Manager:
         for connection in list(self.connections):
             if connection.arena_id == arena_id:
                 connection.dirty.set()
+        from . import lobby
+
+        if lobby.listeners:
+            try:
+                arena = await crud.one(
+                    "SELECT owner_id FROM quakejs.arenas WHERE id=:id", id=arena_id
+                )
+                if arena:
+                    lobby.changed(arena["owner_id"])
+            except Exception:
+                logger.debug("QuakeJS will refresh the lobby on its next heartbeat.")
 
     async def renew(self, match, arena_id):
         if crud.now() - match.last_lease < 5:
@@ -445,9 +468,10 @@ class Manager:
             if (
                 not arena["active"]
                 or arena["worker"] != self.worker
+                or arena["run_id"] != match.run
                 or arena["lease_until"] <= crud.now()
             ):
-                raise ValueError("Arena lease ended.")
+                raise PublicError("Arena lease ended.")
             await tx.execute(
                 "UPDATE quakejs.arenas SET lease_until=:until WHERE id=:id",
                 id=arena_id,
@@ -473,8 +497,9 @@ class Manager:
             raise RuntimeError(
                 "QuakeJS requires one LNbits worker per data directory."
             ) from None
-        self.running = True
         try:
+            self.max_matches = await crud.server_capacity()
+            self.running = True
             while True:
                 for arena_id, match in list(self.matches.items()):
                     async with self.lock:

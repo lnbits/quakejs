@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+    <title>QuakeJS · Public arena lobby</title>
+    <link rel="canonical" href="{{ share_url }}" />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="CREATE QUAKE MATCHES · AND CHARGE A JOIN FEE"
+    />
+    <meta
+      property="og:description"
+      content="Create a Quake arena, set your join fee and invite players. Earn a creator fee from verified kills."
+    />
+    <meta property="og:url" content="{{ share_url }}" />
+    <meta property="og:image" content="{{ share_image }}" />
+    <meta property="og:image:type" content="image/png" />
+    <meta
+      property="og:image:alt"
+      content="CREATE QUAKE MATCHES — AND CHARGE A JOIN FEE"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="CREATE QUAKE MATCHES · AND CHARGE A JOIN FEE"
+    />
+    <meta
+      name="twitter:description"
+      content="Create a Quake arena, set your join fee and invite players. Earn a creator fee from verified kills."
+    />
+    <meta name="twitter:image" content="{{ share_image }}" />
+    <meta
+      name="twitter:image:alt"
+      content="CREATE QUAKE MATCHES — AND CHARGE A JOIN FEE"
+    />
+    <meta
+      name="description"
+      content="Create an arena, invite players and win sats for verified kills."
+    />
+    <link rel="stylesheet" href="/quakejs/static/arena.css" />
+    <link rel="stylesheet" href="/quakejs/static/lobby.css" />
+  </head>
+  <body class="lobby" data-lobby="{{ public_id }}">
+    <main>
+      <section class="panel matches" aria-labelledby="games-title">
+        <div class="match-heading">
+          <h1 id="games-title">Join match</h1>
+          <button id="open-create" type="button">Create game</button>
+        </div>
+        <div id="games" aria-live="polite"></div>
+        <nav class="pagination" aria-label="Arena pages">
+          <button id="previous" type="button" disabled>Previous</button>
+          <span id="page-info"></span>
+          <button id="next" type="button" disabled>Next</button>
+        </nav>
+        <details class="fee-help fine">
+          <summary>Entry &amp; payouts</summary>
+          <p>Each entry buys five lives. Admin and creator haircuts both come
+            from each life’s value (1/5 of the entry). Listed kill winnings are
+            after both fees, rounded down to whole sats; the rounding remainder
+            stays in the arena wallet.</p>
+        </details>
+        <p id="lobby-status" class="fine" role="status">Connecting…</p>
+      </section>
+      <section class="panel scores" aria-labelledby="scores-title">
+        <h2 id="scores-title">Top 10 · sats won</h2>
+        <ol id="scoreboard"></ol>
+        <p class="fine">Paid kill winnings only. Creator fees and pending payouts
+          are excluded. Lightning addresses are public.</p>
+      </section>
+    </main>
+    <dialog id="create-dialog" class="panel public-dialog" aria-labelledby="create-title">
+      <div class="dialog-heading">
+        <h2 id="create-title">Create a game</h2>
+        <button id="close-create" class="close-dialog" type="button" aria-label="Close create game">✕</button>
+      </div>
+          <form id="create-form">
+            <label for="game-title">Game title</label
+            ><input
+              id="game-title"
+              maxlength="80"
+              value="QUAKEJS public arena"
+              required
+            />
+            <label for="entry-sats">Entry sats for five lives</label
+            ><input
+              id="entry-sats"
+              type="number"
+              min="100"
+              max="1000000"
+              step="1"
+              value="100"
+              required
+            />
+            <label for="game-map">Map</label
+            ><select id="game-map" required></select>
+            <p id="admin-fee" class="fine"></p>
+            <label for="creator-fee">Your creator fee (%)</label
+            ><input
+              id="creator-fee"
+              type="number"
+              min="0"
+              max="50"
+              step="1"
+              value="0"
+              required
+            />
+            <label for="creator-address">Your Lightning address</label
+            ><input
+              id="creator-address"
+              maxlength="254"
+              placeholder="you@example.com"
+              autocomplete="off"
+            />
+            <p id="fee-preview" class="fine"></p>
+            <button id="create-button" type="submit" disabled>
+              Create game
+            </button>
+            <p id="create-status" role="status" aria-live="polite"></p>
+            <a id="created-link" hidden>Open your game</a>
+          </form>
+          <p class="fine">
+            Both fees come from each life’s value on a verified kill. Creator
+            payouts are rounded down to whole sats and sent to your Lightning
+            address. Creating a game does not buy lives.
+          </p>
+          <p class="fine">
+            Public games are removed after ten empty minutes unless they still
+            have unused paid lives or live invoices. Games created by the admin
+            do not expire.
+          </p>
+    </dialog>
+    <script src="/quakejs/static/lobby.js"></script>
+  </body>
+</html>

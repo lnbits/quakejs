@@ -4,12 +4,20 @@ window.PageQuakejs = {
     return {
       loading: false,
       saving: false,
+      savingCapacity: false,
+      server: {maxMatches: 4, activeMatches: 0, canManage: false},
       creating: false,
       createDialog: false,
       deletingGameId: '',
       payoutDialog: {show: false, title: '', rows: []},
       deleteDialog: {show: false, game: null},
-      settings: {enabled: false, haircut: 0, walletId: ''},
+      settings: {
+        enabled: false,
+        haircut: 0,
+        walletId: '',
+        allowPublicCreation: false,
+        publicLobbyUrl: ''
+      },
       gameForm: {
         name: 'QUAKEJS public arena',
         joinAmount: 100,
@@ -25,6 +33,14 @@ window.PageQuakejs = {
         rowsNumber: 0
       },
       payoutColumns: [
+        {
+          name: 'kind',
+          label: 'Payout',
+          field: 'kind',
+          align: 'left',
+          format: value =>
+            value === 'creator' ? 'Creator fee' : 'Kill winnings'
+        },
         {name: 'amount', label: 'Sats', field: 'amount', align: 'right'},
         {name: 'status', label: 'Status', field: 'status', align: 'left'},
         {name: 'error', label: 'Details', field: 'error', align: 'left'},
@@ -119,7 +135,7 @@ window.PageQuakejs = {
         !!this.effectiveWalletId &&
         Number.isInteger(this.settings.haircut) &&
         this.settings.haircut >= 0 &&
-        this.settings.haircut <= 100
+        this.settings.haircut <= 50
       )
     },
     canCreate() {
@@ -129,7 +145,7 @@ window.PageQuakejs = {
         this.effectiveWalletId &&
         this.gameForm.name &&
         Number.isSafeInteger(Number(this.gameForm.joinAmount)) &&
-        Number(this.gameForm.joinAmount) >= 50
+        Number(this.gameForm.joinAmount) >= 100
       )
     }
   },
@@ -162,6 +178,7 @@ window.PageQuakejs = {
         const response = await this.requestArenaApi('settings')
         this.settings = {...this.settings, ...(response.settings || {})}
         this.maps = response.maps || []
+        this.server = response.server || this.server
         if (!this.settings.walletId && this.wallets.length)
           this.settings.walletId = this.wallets[0].id
       } catch (error) {
@@ -174,6 +191,13 @@ window.PageQuakejs = {
       this.settings.enabled = enabled
       if (!(await this.saveSettings())) this.settings.enabled = previous
     },
+    async togglePublicCreation(allowed) {
+      if (this.saving || !this.canSave) return
+      const previous = this.settings.allowPublicCreation
+      this.settings.allowPublicCreation = allowed
+      if (!(await this.saveSettings()))
+        this.settings.allowPublicCreation = previous
+    },
     async saveSettings() {
       if (!this.canSave) return false
       this.saving = true
@@ -183,7 +207,8 @@ window.PageQuakejs = {
             enabled: this.settings.enabled,
             walletId: this.effectiveWalletId,
             walletName: this.selectedWalletName,
-            haircut: Number(this.settings.haircut || 0)
+            haircut: Number(this.settings.haircut || 0),
+            allowPublicCreation: this.settings.allowPublicCreation
           })
         ).settings
         this.notify('QUAKEJS settings saved.', 'positive')
@@ -193,6 +218,21 @@ window.PageQuakejs = {
         return false
       } finally {
         this.saving = false
+      }
+    },
+    async saveCapacity() {
+      if (this.savingCapacity || !this.server.canManage) return
+      this.savingCapacity = true
+      try {
+        const response = await this.requestArenaApi('server-settings', 'PUT', {
+          maxMatches: this.server.maxMatches
+        })
+        this.server = response.server
+        this.notify('Match capacity saved. Existing matches continue.', 'positive')
+      } catch (error) {
+        this.showError(error)
+      } finally {
+        this.savingCapacity = false
       }
     },
     async createGame() {

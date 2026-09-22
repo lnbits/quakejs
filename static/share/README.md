@@ -13,3 +13,11 @@ arena's stored price using the existing Pillow dependency. No image generation
 service is called at runtime. DejaVu Sans Condensed Bold 2.37 is bundled for
 consistent typography; its embedded copyright and license notices are reproduced
 in `FONT-LICENSE.txt`.
+
+`lobby.png` is a static public-lobby card made with the imagegen skill using
+`template.png` as the edit target. Its two centered bold white lines read
+"CREATE QUAKE MATCHES" and "AND CHARGE A JOIN FEE", replacing the original
+promotional lettering while preserving the screenshot and its corner branding.
+The lobby includes server-rendered Open Graph and Twitter large-image metadata;
+no JavaScript, account, wallet key or image-generation service is needed to fetch
+the public preview.

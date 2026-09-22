@@ -7,11 +7,18 @@ from pydantic import BaseModel, Field, validator
 
 MAPS = [
     {"value": "aggressor", "label": "Aggressor"},
-    {"value": "oa_dm1", "label": "OA DM1"},
-    {"value": "oa_dm2", "label": "OA DM2"},
+    {"value": "oa_dm7", "label": "OA DM7"},
+    {"value": "oa_minia", "label": "OA Minia"},
+    {"value": "czest1dm", "label": "Czest1dm"},
+    {"value": "oa_shine", "label": "OA Shine"},
     {"value": "kaos2", "label": "Kaos 2"},
 ]
 MAX_PLAYERS = 8
+MAX_TOTAL_HAIRCUT = 50
+
+
+class PublicError(ValueError):
+    """An intentional, fixed message safe to return to an anonymous player."""
 
 
 def prize_per_kill(entry_amount: int, haircut: int) -> int:
@@ -22,7 +29,8 @@ def prize_per_kill(entry_amount: int, haircut: int) -> int:
 class SettingsInput(BaseModel):
     wallet_id: str = Field(alias="walletId", min_length=1, max_length=128)
     enabled: bool = False
-    haircut: int = Field(default=5, ge=0, le=100)
+    haircut: int = Field(default=5, ge=0, le=MAX_TOTAL_HAIRCUT)
+    allow_public_creation: bool = Field(default=False, alias="allowPublicCreation")
 
     @validator("haircut", pre=True)
     def integer_fee(cls, value):
@@ -33,8 +41,10 @@ class SettingsInput(BaseModel):
 
 class ArenaInput(BaseModel):
     name: str = Field(default="QUAKEJS public arena", min_length=1, max_length=80)
-    join_amount: int = Field(alias="joinAmount", default=100, ge=50, le=1_000_000)
-    map: Literal["aggressor", "oa_dm1", "oa_dm2", "kaos2"] = "aggressor"
+    join_amount: int = Field(alias="joinAmount", default=100, ge=100, le=1_000_000)
+    map: Literal["aggressor", "oa_dm7", "oa_minia", "czest1dm", "oa_shine", "kaos2"] = (
+        "aggressor"
+    )
 
     @validator("join_amount", pre=True)
     def integer_amount(cls, value):
@@ -61,3 +71,35 @@ class EntryInput(BaseModel):
     @validator("name")
     def player_name(cls, value):
         return re.sub(r"[^A-Za-z0-9 _.-]", "", value).strip()[:18] or "PLAYER"
+
+
+class PublicArenaInput(ArenaInput):
+    creator_haircut: int = Field(
+        default=0, alias="creatorHaircut", ge=0, le=MAX_TOTAL_HAIRCUT
+    )
+    ln_address: str = Field(default="", alias="lnAddress", max_length=254)
+    nonce: str = Field(regex=r"^[a-f0-9]{48}$")
+
+    @validator("creator_haircut", pre=True)
+    def integer_creator_fee(cls, value):
+        return SettingsInput.integer_fee(value)
+
+    @validator("ln_address")
+    def creator_address(cls, value):
+        return EntryInput.address(value) if value.strip() else ""
+
+    class Config:
+        extra = "forbid"
+
+
+class ServerSettingsInput(BaseModel):
+    max_matches: int = Field(alias="maxMatches", ge=1, le=32)
+
+    @validator("max_matches", pre=True)
+    def integer_capacity(cls, value):
+        if type(value) is not int:
+            raise ValueError("Match capacity must be a whole number from 1 to 32.")
+        return value
+
+    class Config:
+        extra = "forbid"

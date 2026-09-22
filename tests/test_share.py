@@ -3,11 +3,12 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from jinja2 import FileSystemLoader
 from PIL import Image
 
-from lnbits.extensions.quakejs import crud, views
+from lnbits.extensions.quakejs import crud, lobby, views
 from lnbits.extensions.quakejs.share import HEIGHT, WIDTH, render_share_image
 
 
@@ -85,3 +86,37 @@ def test_large_entry_price_still_renders_with_bounded_cache():
     assert Image.open(BytesIO(data)).size == (WIDTH, HEIGHT)
     assert len(data) < 1_000_000
     assert render_share_image.cache_info().maxsize == 32
+
+
+def test_public_lobby_share_card_is_available_to_crawlers_without_keys(monkeypatch):
+    root = Path(views.__file__).parent
+    monkeypatch.setattr(
+        views.renderer.env, "loader", FileSystemLoader(str(root / "templates"))
+    )
+
+    async def setting(public_id):
+        if public_id != "public-lobby":
+            raise lobby.LobbyError("This public lobby is unavailable.")
+        return {"wallet_id": "private-wallet", "id": "private-owner"}
+
+    monkeypatch.setattr(lobby, "setting_for", setting)
+    app = FastAPI()
+    app.include_router(views.router, prefix="/quakejs")
+    app.mount("/quakejs/static", StaticFiles(directory=root / "static"))
+    with TestClient(app, base_url="https://games.example") as client:
+        response = client.get("/quakejs/lobby/public-lobby?private=do-not-share")
+        assert response.status_code == 200
+        tags = Metadata(response.text).tags
+        assert tags["twitter:card"] == "summary_large_image"
+        assert tags["og:title"] == "CREATE QUAKE MATCHES · AND CHARGE A JOIN FEE"
+        assert tags["og:url"] == "https://games.example/quakejs/lobby/public-lobby"
+        assert tags["og:image"] == tags["twitter:image"]
+        for private in ("private-wallet", "private-owner", "do-not-share"):
+            assert private not in response.text
+        image = client.get(tags["og:image"])
+        assert image.status_code == 200
+        assert image.headers["content-type"] == "image/png"
+        assert image.content == (root / "static/share/lobby.png").read_bytes()
+        with Image.open(BytesIO(image.content)) as card:
+            assert card.width >= 1200 and 1.7 < card.width / card.height < 1.9
+        assert client.get("/quakejs/lobby/disabled").status_code == 404
