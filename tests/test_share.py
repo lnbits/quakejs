@@ -53,6 +53,12 @@ def test_social_crawlers_receive_public_metadata_and_matching_image(monkeypatch)
         for arena, amount, prize in (("cheap", 50, 9), ("expensive", 100, 19)):
             response = client.get(f"/quakejs/games/{arena}?private=do-not-share")
             assert response.status_code == 200
+            head = client.head(
+                f"/quakejs/games/{arena}", headers={"User-Agent": "Twitterbot/1.0"}
+            )
+            assert head.status_code == 200 and head.content == b""
+            assert head.headers["content-type"] == response.headers["content-type"]
+            assert head.headers["content-length"] == str(len(response.content))
             tags = Metadata(response.text).tags
             assert tags["twitter:card"] == "summary_large_image"
             assert (
@@ -67,6 +73,11 @@ def test_social_crawlers_receive_public_metadata_and_matching_image(monkeypatch)
             image = client.get(tags["og:image"])
             assert image.status_code == 200
             assert image.headers["content-type"] == "image/jpeg"
+            head = client.head(
+                tags["og:image"], headers={"User-Agent": "Twitterbot/1.0"}
+            )
+            assert head.status_code == 200 and head.content == b""
+            assert head.headers == image.headers
             assert "public" in image.headers["cache-control"]
             decoded = Image.open(BytesIO(image.content))
             assert decoded.size == (WIDTH, HEIGHT)
@@ -79,6 +90,8 @@ def test_social_crawlers_receive_public_metadata_and_matching_image(monkeypatch)
         assert images[0] != images[1]
         assert client.get("/quakejs/games/missing").status_code == 404
         assert client.get("/quakejs/games/missing/share.jpg").status_code == 404
+        assert client.head("/quakejs/games/missing").status_code == 404
+        assert client.head("/quakejs/games/missing/share.jpg").status_code == 404
 
 
 def test_large_entry_price_still_renders_with_bounded_cache():
@@ -106,6 +119,11 @@ def test_public_lobby_share_card_is_available_to_crawlers_without_keys(monkeypat
     with TestClient(app, base_url="https://games.example") as client:
         response = client.get("/quakejs/lobby/public-lobby?private=do-not-share")
         assert response.status_code == 200
+        head = client.head(
+            "/quakejs/lobby/public-lobby", headers={"User-Agent": "Twitterbot/1.0"}
+        )
+        assert head.status_code == 200 and head.content == b""
+        assert head.headers == response.headers
         tags = Metadata(response.text).tags
         assert tags["twitter:card"] == "summary_large_image"
         assert tags["og:title"] == "CREATE QUAKE MATCHES · AND CHARGE A JOIN FEE"
@@ -116,7 +134,11 @@ def test_public_lobby_share_card_is_available_to_crawlers_without_keys(monkeypat
         image = client.get(tags["og:image"])
         assert image.status_code == 200
         assert image.headers["content-type"] == "image/png"
+        head = client.head(tags["og:image"])
+        assert head.status_code == 200 and head.content == b""
+        assert head.headers == image.headers
         assert image.content == (root / "static/share/lobby.png").read_bytes()
         with Image.open(BytesIO(image.content)) as card:
             assert card.width >= 1200 and 1.7 < card.width / card.height < 1.9
         assert client.get("/quakejs/lobby/disabled").status_code == 404
+        assert client.head("/quakejs/lobby/disabled").status_code == 404

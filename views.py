@@ -51,17 +51,25 @@ class SafePublicRoute(APIRoute):
 
         async def guarded(request):
             try:
-                return await handler(request)
+                response = await handler(request)
             except (HTTPException, RequestValidationError):
                 raise
             except Exception:
                 if not public:
                     raise
                 logger.warning("QuakeJS public request failed; retry is available.")
-                return PrivateJSONResponse(
+                response = PrivateJSONResponse(
                     {"detail": "QuakeJS is temporarily unavailable. Retry shortly."},
                     status_code=503,
                 )
+            if request.method == "HEAD":
+                # Keep GET metadata, including its Content-Length, but no body.
+                return Response(
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    background=response.background,
+                )
+            return response
 
         return guarded
 
@@ -138,6 +146,7 @@ router.add_api_route(
 )
 
 
+@router.head("/games/{arena_id}", include_in_schema=False)
 @router.get("/games/{arena_id}", name="quakejs_public_page")
 async def public_page(request: Request, arena_id: str):
     arena = await crud.one("SELECT * FROM quakejs.arenas WHERE id=:id", id=arena_id)
@@ -178,6 +187,7 @@ async def public_page(request: Request, arena_id: str):
     )
 
 
+@router.head("/games/{arena_id}/share.jpg", include_in_schema=False)
 @router.get("/games/{arena_id}/share.jpg", name="quakejs_share_image")
 async def share_image(arena_id: str):
     arena = await crud.one(
@@ -584,6 +594,7 @@ async def websocket(websocket: WebSocket, arena_id: str):
                 pass
 
 
+@router.head("/lobby/{public_id}", include_in_schema=False)
 @router.get("/lobby/{public_id}", name="quakejs_public_lobby")
 async def public_lobby(request: Request, public_id: str):
     try:
