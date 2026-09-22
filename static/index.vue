@@ -383,8 +383,9 @@
           v-text="'Close ' + (deleteDialog.game?.name || 'this arena') + '?'"
         ></p>
         <p class="text-caption q-mb-none">
-          Arenas with unused paid lives or live invoices must remain open until
-          those entries finish.
+          This ends the match and makes unused lives unplayable. Outstanding
+          invoices may still be paid, but will not reopen the arena. There are
+          no automatic refunds. Payment records and pending payouts are kept.
         </p>
       </q-card-section>
       <q-card-actions align="right">

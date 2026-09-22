@@ -68,11 +68,13 @@ VPS before increasing it. Empty servers stop after
 five minutes. A native process is limited to 512 MiB of address space and 64 file
 descriptors. Game assets are shared through the operating system's file cache.
 
-Closing an arena is refused while it has unused paid lives or unexpired invoices.
-Disable new payments in Settings, allow existing players to finish, then close it.
-The Payouts button lists the latest payout statuses and payment hashes for review.
-A delayed confirmation for an already paid invoice reopens a closed arena so
-those purchased lives can still be used.
+An authenticated arena owner can close a game even with players, unused lives or
+unexpired invoices. Closure removes it from the lobby, blocks admission and new
+invoices, and stops its engine on the next lease check (within about five seconds).
+Unused lives become unplayable; there are no automatic refunds. Late payments
+are recorded but cannot reopen an admin-closed game. Payment records are retained
+and pending payouts continue. The Payouts button lists payout statuses for review.
+Late payments can still restore automatically expired public games.
 
 ## Payment and game trust boundaries
 

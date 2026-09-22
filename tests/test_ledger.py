@@ -12,6 +12,7 @@ from lnbits.extensions.quakejs.migrations import (
     m007_native_arena_ledger,
     m009_public_lobbies,
     m010_server_capacity,
+    m011_admin_arena_closure,
 )
 from lnbits.extensions.quakejs.models import ArenaInput, EntryInput
 from lnbits.settings import settings
@@ -30,6 +31,7 @@ async def arena(tmp_path, monkeypatch):
     await m007_native_arena_ledger(database)
     await m009_public_lobbies(database)
     await m010_server_capacity(database)
+    await m011_admin_arena_closure(database)
     await crud.save_settings("owner", "wallet", True, 5)
     row = await crud.create_arena("owner", ArenaInput(joinAmount=100))
     # Keep exercising existing 50-sat games after raising the creation minimum.

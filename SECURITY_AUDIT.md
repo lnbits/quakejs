@@ -274,3 +274,16 @@ writes and admin game creation enforce the admin limit. The forms mirror these
 limits, but backend validation does not depend on them. Boundary tests cover
 0+50, 5+45 and 50+0, rejecting larger totals without inserting a game. Existing
 games and already-funded payment terms are not rewritten.
+
+## Explicit owner closure
+
+The authenticated arena owner can now close a game despite active players,
+unused lives or outstanding invoices. Ownership checks are retained. Migration
+11 adds an explicit admin-closure flag so late settlements cannot reverse the
+decision; automatic expiry still allows late-payment restoration. Closure does
+not delete financial records or cancel earned payouts. New admissions and
+invoices are rejected, and the existing supervisor stops the engine when its
+lease is next checked. The confirmation states that unused lives become
+unplayable and there are no automatic refunds. Regression coverage includes
+unauthenticated/other-owner rejection, repeated closure, late settlement,
+retained entries and both payout outboxes, and admission/lease rejection.

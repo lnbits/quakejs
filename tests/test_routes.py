@@ -44,6 +44,7 @@ def test_websocket_rejects_cross_origin_and_fake_kills(monkeypatch):
         assert client.post(
             "/quakejs/api/v1/games", json={"name": "Unauthorized"}
         ).status_code in (401, 403)
+        assert client.delete("/quakejs/api/v1/games/arena").status_code in (401, 403)
 
 
 @pytest.mark.anyio

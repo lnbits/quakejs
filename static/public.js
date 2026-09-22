@@ -11,7 +11,7 @@ const arena = {
   tally: 0, joining: false, stopped: false, fragQueue: Promise.resolve(), engineMessages: []
 }
 
-function status(message) { $('status').textContent = message }
+function status(message) { $('status').textContent = arena.game?.status === 'closed' ? 'This arena has been closed. Contact the arena owner about unused lives or payments.' : message }
 function canRespawn() { return arena.player && ['dead', 'left'].includes(arena.player.status) && arena.player.livesRemaining > 0 }
 function entryStatus(ready = false) {
   if (arena.entryMode === 'payment') return ready ? 'Payment received. Your arena is ready.' : 'Payment received. Joining the arena…'
@@ -29,6 +29,11 @@ function showEntry() {
   $('join-button').textContent = canRespawn() ? `Respawn · ${arena.player.livesRemaining} lives left` : 'Pay for 5 lives'
   $('address').hidden = canRespawn()
   $('address-label').hidden = canRespawn()
+  if (arena.game?.status === 'closed') {
+    $('join-form').hidden = true
+    clearTimeout(arena.invoiceTimer)
+    status('')
+  }
 }
 function feed(message) {
   const item = document.createElement('li')
@@ -109,7 +114,7 @@ function engineOptions(session) {
     arenaInputEnabled() { return arena.player?.status === 'alive' && $('overlay').hidden && !document.hidden && (touchMode || document.pointerLockElement === $('canvas')) },
     arenaReady() {
       arena.engineReadyPlayerId = arena.enginePlayerId
-      if (arena.player?.status === 'alive') {
+      if (arena.player?.status === 'alive' && arena.game?.status === 'active') {
         $('resume').hidden = false
         status(entryStatus(true))
         arena.entryMode = ''
@@ -178,6 +183,14 @@ function applyState(response) {
   $('tally').textContent=`Won: ${response.won||0} sats`
   if(response.pendingWinnings) $('tally').textContent+=` · Pending: ${response.pendingWinnings} sats`
   $('role').textContent='Dedicated arena server'
+  if (arena.game.status === 'closed') {
+    document.exitPointerLock?.()
+    arena.enginePlayerId=''
+    arena.admitting=false
+    command('disconnect')
+    showEntry()
+    return
+  }
   if (arena.player?.status==='alive') {
     $('join-form').hidden=true; $('invoice').hidden=true
     lobbyLink.hidden=!response.lobbyUrl

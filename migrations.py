@@ -176,3 +176,9 @@ async def m010_server_capacity(db):
         "INSERT INTO quakejs.server_settings(id,max_matches) VALUES(1,4) "
         "ON CONFLICT(id) DO NOTHING"
     )
+
+
+async def m011_admin_arena_closure(db):
+    await db.execute(
+        "ALTER TABLE quakejs.arenas ADD COLUMN admin_closed INTEGER NOT NULL DEFAULT 0"
+    )

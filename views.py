@@ -330,21 +330,11 @@ async def close_game(arena_id: str, key: WalletTypeInfo = Depends(require_admin_
         if not row:
             raise HTTPException(404, "Arena not found.")
         await tx.lock_arena(arena_id, active=False)
-        outstanding = await tx.one(
-            "SELECT COUNT(*) AS n FROM quakejs.entries WHERE arena_id=:id AND "
-            "(remaining>0 OR (status IN ('creating','pending') AND "
-            "expires_at>:now))",
+        await tx.execute(
+            "UPDATE quakejs.arenas SET active=0,admin_closed=1,lobby_hidden=1 "
+            "WHERE id=:id",
             id=arena_id,
-            now=crud.now(),
         )
-        if outstanding["n"]:
-            raise HTTPException(
-                409,
-                "This arena still has unused paid lives or live invoices. "
-                "Disable new entries in Settings and let those lives finish "
-                "before closing it.",
-            )
-        await tx.execute("UPDATE quakejs.arenas SET active=0 WHERE id=:id", id=arena_id)
     await manager.notify(arena_id)
     return {"success": True}
 

@@ -5,6 +5,7 @@ from lnbits.extensions.quakejs.migrations import (
     m007_native_arena_ledger,
     m009_public_lobbies,
     m010_server_capacity,
+    m011_admin_arena_closure,
 )
 from lnbits.extensions.quakejs.models import MAPS, ArenaInput
 from lnbits.extensions.quakejs.server import manager
@@ -16,6 +17,9 @@ async def main():
     if not any(row["name"] == "allow_public_creation" for row in columns):
         await m009_public_lobbies(crud.db)
     await m010_server_capacity(crud.db)
+    columns = await crud.all_rows("PRAGMA quakejs.table_info(arenas)")
+    if not any(column["name"] == "admin_closed" for column in columns):
+        await m011_admin_arena_closure(crud.db)
     await crud.save_settings("test-owner", "test-wallet", True, 5)
     manager.directory.mkdir(parents=True, exist_ok=True)
     task = asyncio.create_task(manager.loop())

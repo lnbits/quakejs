@@ -291,11 +291,12 @@ async def settle_entry(payment):
             hash=payment.payment_hash,
             invoice=payment.bolt11,
         )
-        # A payment may have settled before expiry but its notification arrived
-        # after the owner closed the arena. Honor those already purchased lives.
+        # Late payments can restore automatically expired arenas, but cannot
+        # undo an explicit admin closure. Keep the paid entry for owner review.
         await tx.execute(
             "UPDATE quakejs.arenas SET "
-            "active=1,lobby_hidden=0,idle_since=:now WHERE id=:id",
+            "active=1,lobby_hidden=0,idle_since=:now "
+            "WHERE id=:id AND admin_closed=0",
             now=now(),
             id=entry["arena_id"],
         )

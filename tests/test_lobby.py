@@ -78,6 +78,72 @@ async def test_public_creation_is_opt_in_idempotent_and_wallet_bound(arena):
 
 
 @pytest.mark.anyio
+async def test_owner_closure_preserves_ledger_and_cannot_be_undone_by_payment(arena):
+    setting, game = await public_arena()
+    victim_token, _, _ = await paid(game)
+    killer_token, _, _ = await paid(game)
+    victim = await crud.allocate_life(game["id"], victim_token, game["run_id"])
+    killer = await crud.allocate_life(game["id"], killer_token, game["run_id"])
+    await crud.consume_death(game["run_id"], 1, victim["id"], killer["id"])
+    entry = await crud.reserve_entry(
+        game["id"],
+        crud.uid(),
+        EntryInput(lnAddress="late@example.com", nonce=crud.uid()),
+    )
+    outbox = await crud.all_rows("SELECT * FROM quakejs.payouts")
+    creator_outbox = await crud.all_rows("SELECT * FROM quakejs.creator_payouts")
+    assert outbox and creator_outbox
+    with pytest.raises(views.HTTPException) as error:
+        await views.close_game(
+            game["id"], SimpleNamespace(wallet=SimpleNamespace(user="other-owner"))
+        )
+    assert error.value.status_code == 404
+    assert (await crud.public_state(game["id"]))["game"]["status"] == "active"
+    key = SimpleNamespace(wallet=SimpleNamespace(user="owner"))
+    assert await views.close_game(game["id"], key) == {"success": True}
+    assert await views.close_game(game["id"], key) == {"success": True}
+    payment = SimpleNamespace(
+        success=True,
+        is_in=True,
+        extra={"tag": "quakejs", "quakejs_entry": entry["id"]},
+        wallet_id="wallet",
+        amount=entry["amount"] * 1000,
+        payment_hash=crud.uid(),
+        bolt11="test-invoice",
+    )
+    await crud.settle_entry(payment)
+    await crud.settle_entry(payment)
+    state = await crud.public_state(game["id"], victim_token)
+    assert state["game"]["status"] == "closed" and not state["canJoin"]
+    assert state["player"]["livesRemaining"] == 4
+    assert game["id"] not in {
+        row["id"] for row in (await lobby.snapshot(setting["public_id"]))["games"]
+    }
+    recorded = await crud.one(
+        "SELECT * FROM quakejs.entries WHERE id=:id", id=entry["id"]
+    )
+    assert recorded["status"] == "paid" and recorded["remaining"] == 5
+    assert await crud.all_rows("SELECT * FROM quakejs.payouts") == outbox
+    assert (
+        await crud.all_rows("SELECT * FROM quakejs.creator_payouts") == creator_outbox
+    )
+    assert await payments.claim_payout()  # Closure does not block earned payouts.
+    with pytest.raises(ValueError, match="unavailable"):
+        await crud.allocate_life(game["id"], victim_token, game["run_id"])
+    with pytest.raises(ValueError, match="unavailable"):
+        await crud.reserve_entry(
+            game["id"],
+            crud.uid(),
+            EntryInput(lnAddress="new@example.com", nonce=crud.uid()),
+        )
+    from lnbits.extensions.quakejs.server import Manager
+
+    manager = Manager()
+    with pytest.raises(ValueError, match="lease ended"):
+        await manager.renew(SimpleNamespace(last_lease=0), game["id"])
+
+
+@pytest.mark.anyio
 async def test_one_frag_creates_two_bounded_transfers_and_preserves_respawn(
     arena, monkeypatch
 ):
