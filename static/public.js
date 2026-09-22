@@ -153,6 +153,10 @@ function engineStopped() {
 }
 
 function showInvoice(invoice) {
+  if (arena.game?.status === 'closed') {
+    showEntry()
+    return
+  }
   $('create-new-game').hidden = true
   clearTimeout(arena.invoiceTimer)
   if(invoice.expiresAt) arena.invoiceTimer=setTimeout(()=>{
@@ -216,7 +220,7 @@ function applyState(response) {
 }
 async function join(event) {
   event.preventDefault()
-  if(arena.joining || arena.engineFailed || !arena.module) return
+  if(arena.joining || arena.engineFailed || !arena.module || arena.game?.status === 'closed') return
   arena.joining=true; $('join-button').disabled=true
   try {
     if(canRespawn()) {

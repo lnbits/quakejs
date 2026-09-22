@@ -589,3 +589,86 @@ async def test_zero_creator_fee_never_queues_a_creator_payment(arena, address):
     assert payout["amount"] == 19  # 100 / 5, less only the 5% admin fee, rounded down.
     assert payout["ln_address"] == "winner@example.com"
     assert await payments.claim_payout() is None
+
+
+@pytest.mark.anyio
+async def test_closure_during_invoice_creation_does_not_return_payment_request(
+    arena, monkeypatch
+):
+    started, release = asyncio.Event(), asyncio.Event()
+    captured = {}
+
+    async def provider(**values):
+        captured.update(values)
+        started.set()
+        await release.wait()
+        return SimpleNamespace(
+            success=False,
+            is_in=True,
+            payment_hash="delayed-hash",
+            bolt11="delayed-invoice",
+        )
+
+    monkeypatch.setattr(payments, "create_invoice", provider)
+    token = crud.uid()
+    task = asyncio.create_task(
+        payments.create_entry(
+            arena["id"],
+            token,
+            EntryInput(lnAddress="late@example.com", nonce=crud.uid()),
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        await views.close_game(
+            arena["id"], SimpleNamespace(wallet=SimpleNamespace(user="owner"))
+        )
+        release.set()
+        with pytest.raises(ValueError, match="closed. Do not pay"):
+            await task
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    entry = await crud.one(
+        "SELECT * FROM quakejs.entries WHERE id=:id", id=captured["external_id"]
+    )
+    assert entry["status"] == "pending" and entry["bolt11"] == "delayed-invoice"
+    state = await crud.public_state(arena["id"], token)
+    assert state["game"]["status"] == "closed" and not state["canJoin"]
+    assert "invoice" not in state
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("payment_first", [False, True])
+async def test_concurrent_admin_closure_and_settlement_stay_closed(
+    arena, payment_first
+):
+    entry = await crud.reserve_entry(
+        arena["id"],
+        crud.uid(),
+        EntryInput(lnAddress="late@example.com", nonce=crud.uid()),
+    )
+    payment = SimpleNamespace(
+        success=True,
+        is_in=True,
+        extra={"tag": "quakejs", "quakejs_entry": entry["id"]},
+        wallet_id="wallet",
+        amount=entry["amount"] * 1000,
+        payment_hash=crud.uid(),
+        bolt11="late-invoice",
+    )
+    operations = [
+        views.close_game(
+            arena["id"], SimpleNamespace(wallet=SimpleNamespace(user="owner"))
+        ),
+        crud.settle_entry(payment),
+    ]
+    if payment_first:
+        operations.reverse()
+    await asyncio.gather(*operations)
+    state = await crud.public_state(arena["id"])
+    assert state["game"]["status"] == "closed" and not state["canJoin"]
+    recorded = await crud.one(
+        "SELECT * FROM quakejs.entries WHERE id=:id", id=entry["id"]
+    )
+    assert recorded["status"] == "paid" and recorded["remaining"] == 5

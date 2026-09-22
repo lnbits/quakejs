@@ -913,8 +913,9 @@ async def test_bad_journal_does_not_stop_other_matches(arena, monkeypatch):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["rejected", "timeout"])
 async def test_bad_address_exhausts_retries_without_blocking_respawn(
-    arena, monkeypatch
+    arena, monkeypatch, failure
 ):
     from unittest.mock import AsyncMock
 
@@ -926,15 +927,14 @@ async def test_bad_address_exhausts_retries_without_blocking_respawn(
     killer = await crud.allocate_life(arena["id"], killer_token, arena["run_id"])
     await crud.consume_death(arena["run_id"], 1, victim["id"], killer["id"])
     row = await payments.claim_payout()
-    monkeypatch.setattr(
-        payments,
-        "get_pr_from_lnurl",
-        AsyncMock(
-            side_effect=LnurlResponseException(
-                "private provider error with token=secret"
-            )
-        ),
-    )
+
+    async def provider(*args):
+        if failure == "timeout":
+            await asyncio.Event().wait()
+        raise LnurlResponseException("private provider error with token=secret")
+
+    monkeypatch.setattr(payments, "PAYOUT_INVOICE_TIMEOUT", 0.01)
+    monkeypatch.setattr(payments, "get_pr_from_lnurl", provider)
     send = AsyncMock()
     monkeypatch.setattr(payments, "pay_invoice", send)
     for _ in range(8):
@@ -942,6 +942,8 @@ async def test_bad_address_exhausts_retries_without_blocking_respawn(
     assert row["status"] == "failed"
     assert row["attempts"] == 8
     assert "secret" not in row["error"]
+    if failure == "timeout":
+        assert row["error"] == "Lightning address provider timed out."
     send.assert_not_awaited()
     assert (await crud.public_state(arena["id"], killer_token))["won"] == 0
     respawn = await crud.allocate_life(arena["id"], victim_token, arena["run_id"])

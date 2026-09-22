@@ -204,8 +204,10 @@
       $('created-link').href =
         '/quakejs/games/' + encodeURIComponent(result.game.id)
       $('created-link').hidden = false
-      $('created-link').scrollIntoView({block: 'nearest'})
-      await load()
+      $('create-dialog').close()
+      await load().catch(error => {
+        $('lobby-status').textContent = error.message
+      })
     } catch (error) {
       $('create-status').textContent =
         error.message || 'Could not create the game. Retry shortly.'

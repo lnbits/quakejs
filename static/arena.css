@@ -28,6 +28,7 @@ progress { width: 100%; height: 5px; accent-color: #ffad45; }
 .controls { padding-top: 10px; border-top: 1px solid #344354; font-size: 12px; }
 .controls, .fine, .credits { color: #9aabbe; }
 .fine { font-size: 11px; }
+#address[hidden] + #address-hint { display: none; }
 aside { position: absolute; left: 16px; top: 90px; z-index: 1; max-width: 280px; pointer-events: none; text-shadow: 0 1px 3px #000; }
 #roster { display: none; }
 #powered-by { position: absolute; z-index: 2; bottom: max(3px, env(safe-area-inset-bottom)); left: 0; width: 100%; text-align: center; font-size: 9px; letter-spacing: 1px; color: #c3cbd5; text-shadow: 0 1px 3px #000; pointer-events: none; }

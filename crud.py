@@ -563,7 +563,7 @@ async def public_state(arena_id, token=""):
         if not entry or entry["status"] != "paid":
             if entry and entry["expires_at"] <= now():
                 result["invoiceExpired"] = True
-            elif entry and entry["status"] == "pending":
+            elif entry and entry["status"] == "pending" and arena["active"]:
                 result["invoice"] = {
                     "paymentHash": entry["payment_hash"],
                     "paymentRequest": entry["bolt11"],
@@ -583,7 +583,8 @@ async def public_state(arena_id, token=""):
             "entryAmount": entry["amount"],
             "paidAmount": entry["amount"] / 5,
             "slot": life["slot"] if life else 0,
-            "autoAdmit": balance["n"] > 0
+            "autoAdmit": bool(arena["active"])
+            and balance["n"] > 0
             and (not life or (life["entry_id"] != entry["id"])),
             "payoutStatus": "",
             "killerId": "",

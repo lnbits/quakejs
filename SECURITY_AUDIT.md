@@ -287,3 +287,46 @@ lease is next checked. The confirmation states that unused lives become
 unplayable and there are no automatic refunds. Regression coverage includes
 unauthenticated/other-owner rejection, repeated closure, late settlement,
 retained entries and both payout outboxes, and admission/lease rejection.
+
+## Security and payment review after admin closure
+
+Reviewed authenticated ownership/capacity controls, anonymous lobby and entry
+routes, session tokens, WebSocket origin/size/rate limits, native admission and
+journal boundaries, invoice settlement, both payout outboxes, and the local
+LNbits LNURL helper. No core files were changed.
+
+Two payment-flow edge cases were patched:
+
+- Invoice creation releases the arena lock while awaiting the wallet. If an
+  admin closes the game during that wait, the response now withholds the invoice.
+  Closed public state also withholds invoices and auto-admission hints. The
+  browser ignores a delayed invoice response after receiving closure state.
+  Existing invoice records remain available for settlement and owner review.
+- A provider lookup that exceeded the worker's overall deadline previously
+  bypassed the invoice retry counter. A separate 15-second lookup deadline now
+  converts this into an ordinary bounded retry, ending after eight failures.
+  This applies before sending money; uncertain sends retain exact-hash
+  reconciliation and are never automatically resubmitted.
+
+Regression cases exercise a suspended invoice provider while an owner closes
+the arena, concurrent closure/settlement in both scheduling orders, and repeated
+provider timeouts through retry exhaustion without blocking funded respawns.
+Invoice and payout I/O use fakes; this review makes no live transfers.
+
+Limits: this is a source review with local regression and confinement checks,
+not proof that the native engine or client is exploit-free. Client aim/wall
+cheats and collusion are not eliminated by authoritative payment accounting.
+Already-issued invoices cannot be revoked by closing a game. Provider limits,
+routing failures and uncertain sends can still require owner review; successful
+payment delivery is not guaranteed. Existing public creation/socket limits
+reduce abuse but do not constitute protection against a distributed flood.
+
+Verification: `make check smoke sandbox-check` passed 130 Python tests, the
+existing five asset tests, startup of all six configured maps, and the native
+confinement probe. A subsequent combined JavaScript run passed all six tests,
+including the new delayed-invoice UI regression now included in `make test`.
+That UI regression executes the real handlers with a mocked DOM, not a full
+browser or live Lightning provider. The existing three template API deprecation
+warnings remain. Changed files for this pass: `payments.py`, `crud.py`,
+`static/public.js`, its corresponding-source bundle, `tests/test_ledger.py`,
+`tests/test_lobby.py`, `tests/test_public_ui.mjs`, `Makefile`, and this review.

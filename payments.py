@@ -21,10 +21,12 @@ from lnbits.core.services.payments import check_payment_status
 from . import crud
 from .models import PublicError
 
+PAYOUT_INVOICE_TIMEOUT = 15
+
 
 def invoice_error_detail(error):
     """Report known failures without logging provider URLs, invoices or secrets."""
-    if isinstance(error, httpx.TimeoutException) or isinstance(
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)) or isinstance(
         error.__cause__, httpx.TimeoutException
     ):
         return "Lightning address provider timed out."
@@ -95,6 +97,13 @@ async def create_entry(arena_id, token, data):
         )
     if not entry.get("bolt11"):
         raise PublicError("Your invoice is being prepared. Please retry shortly.")
+    # Invoice creation awaits a provider outside the arena lock. An owner may
+    # close the game meanwhile; retain the invoice for reconciliation, not display.
+    arena = await crud.one(
+        "SELECT active FROM quakejs.arenas WHERE id=:id", id=arena_id
+    )
+    if not arena or not arena["active"]:
+        raise PublicError("This arena has been closed. Do not pay its invoice.")
     return {
         "playerToken": token,
         "paymentHash": entry["payment_hash"],
@@ -184,7 +193,10 @@ async def process_payout(row):
     if row["status"] == "queued":
         # Fetching an invoice cannot transfer money and can safely be retried.
         try:
-            pr = await get_pr_from_lnurl(row["ln_address"], row["amount"] * 1000)
+            # End provider lookups before the worker's overall deadline so their
+            # failures count towards the bounded invoice-preparation retries.
+            with fail_after(PAYOUT_INVOICE_TIMEOUT):
+                pr = await get_pr_from_lnurl(row["ln_address"], row["amount"] * 1000)
             invoice = decode(pr)
             if (
                 invoice.amount_msat != row["amount"] * 1000

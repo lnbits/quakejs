@@ -50,7 +50,8 @@
             <progress id="progress" max="100" value="0"></progress>
             <form id="join-form">
               <label id="address-label" for="address">Your Lightning address</label>
-              <input id="address" type="text" maxlength="320" autocomplete="off" placeholder="you@example.com" required />
+              <input id="address" type="text" maxlength="320" autocomplete="off" placeholder="you@example.com" aria-describedby="address-hint" required />
+              <p id="address-hint" class="fine">No address? Use this to tip us tip@quake.lnbits.com</p>
               <button id="join-button" type="button" disabled>Pay for 5 lives</button>
             </form>
             <div id="invoice" hidden><img id="invoice-qr" alt="Lightning invoice QR code" /><textarea id="invoice-text" aria-label="Lightning invoice" readonly rows="2" spellcheck="false"></textarea><button id="copy-invoice" type="button">Copy invoice</button></div>

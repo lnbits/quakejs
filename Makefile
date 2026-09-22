@@ -14,7 +14,7 @@ lint:
 
 test:
 	$(ENV) $(PYTHON) -m pytest tests -o addopts='' -q
-	node --test tests/test_assets.mjs
+	node --test tests/test_assets.mjs tests/test_public_ui.mjs
 
 smoke:
 	$(ENV) $(PYTHON) tests/smoke.py
