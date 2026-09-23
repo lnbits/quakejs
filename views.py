@@ -166,7 +166,7 @@ async def public_page(request: Request, arena_id: str):
             headers={"Cache-Control": "no-store"},
         )
     game = crud.public_arena(arena)
-    title = f"FIGHT ME IN QUAKE · SATS FOR KILLS · {game['joinAmount']} SATS TO JOIN"
+    title = f"JOIN THE BATTLE · SATS FOR KILLS · {game['joinAmount']} SATS TO JOIN"
     fee_label = f"{game['haircut']}% arena fee"
     if game["creatorHaircut"]:
         fee_label += f" and {game['creatorHaircut']}% creator fee"
@@ -186,7 +186,7 @@ async def public_page(request: Request, arena_id: str):
             "share_image": str(
                 request.url_for("quakejs_share_image", arena_id=arena_id)
             )
-            + f"?v=1-{game['joinAmount']}",
+            + f"?v=3-{game['joinAmount']}",
             "share_width": WIDTH,
             "share_height": HEIGHT,
         },

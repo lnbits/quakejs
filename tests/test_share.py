@@ -63,7 +63,7 @@ def test_social_crawlers_receive_public_metadata_and_matching_image(monkeypatch)
             assert tags["twitter:card"] == "summary_large_image"
             assert (
                 tags["og:title"]
-                == f"FIGHT ME IN QUAKE · SATS FOR KILLS · {amount} SATS TO JOIN"
+                == f"JOIN THE BATTLE · SATS FOR KILLS · {amount} SATS TO JOIN"
             )
             assert f"Earn {prize} sats per kill" in tags["og:description"]
             assert tags["og:url"] == f"https://games.example/quakejs/games/{arena}"

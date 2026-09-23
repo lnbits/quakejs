@@ -1,12 +1,12 @@
 # Public arena share artwork
 
 `template.png` was created using built-in image generation in edit mode from the
-Quake screenshot supplied by the extension owner. It retains the screenshot's
-branding. The owner-supplied image is promotional artwork, not bundled game data.
+replacement Quake screenshot supplied by the extension owner. The owner-supplied
+image is promotional artwork, not bundled game data.
 
-Exact generation prompt:
+Latest edit prompt (built-in image generation, using the replacement screenshot):
 
-> Edit the attached Quake gameplay screenshot into a social share card template. Keep the screenshot background, scene, colors, weapon, HUD and corner branding faithfully unchanged. Wide landscape image, ideally 1280 by 720. Add exactly two lines of very large bold white uppercase condensed sans serif text, centered horizontally: first line 'FIGHT ME IN QUAKE', second line 'SATS FOR KILLS'. Place these two lines in the middle area, with enough space for an equally bold third line underneath around y=490 of a 720px canvas. Strong dark text outline/shadow for clear contrast against the red screenshot. Do NOT add the third line: the extension will render the arena-specific price there programmatically. No invented price, no placeholder X, no other added text. Preserve the supplied image composition.
+> Use case: text-localization. Edit target: the newest attached image, the 1280x720 Quake gameplay screenshot with a central red enemy and muzzle flash. Create a replacement social-share thumbnail template using THIS screenshot as the full background. Preserve its scene, architecture, action, weapon, HUD, colors, framing and landscape 16:9 aspect ratio as faithfully as possible. Add exactly two centered lines of very large bold condensed WHITE uppercase text with strong black outline/shadow for contrast: first line "JOIN THE BATTLE", second line "SATS FOR KILLS". Match classic bold game thumbnail typography. Position first line around y=245 and second line around y=390 on the 1280x720 canvas, with sufficient clear space for the application to later draw a third price line centered at y=533. Do not add a price, placeholder, third line, logos or watermarks. The background must be the supplied new gameplay screenshot, not the earlier screenshot with corner branding. Output the edited template.
 
 `../../share.py` renders the final 1200 × 675 JPEG, adding the third line with the
 arena's stored price using the existing Pillow dependency. No image generation
@@ -15,7 +15,7 @@ consistent typography; its embedded copyright and license notices are reproduced
 in `FONT-LICENSE.txt`.
 
 `lobby.png` is a static public-lobby card made with the imagegen skill using
-`template.png` as the edit target. Its two centered bold white lines read
+the earlier branded template as the edit target. Its two centered bold white lines read
 "CREATE QUAKE MATCHES" and "AND CHARGE A JOIN FEE", replacing the original
 promotional lettering while preserving the screenshot and its corner branding.
 The lobby includes server-rendered Open Graph and Twitter large-image metadata;
