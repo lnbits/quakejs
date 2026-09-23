@@ -11,7 +11,7 @@ const digest=Buffer.from(await webcrypto.subtle.digest('SHA-256',pack)).toString
 function loader(responses) {
   const calls=[]
   const context={window:{},Uint8Array,TextDecoder,crypto:webcrypto,fetch:async(url,options)=>{
-    assert.equal(url,'/quakejs/assets/arena.pk3?v='+digest)
+    assert.equal(url,'/quakejs/static/arena/baseoa/arena.pk3?v='+digest)
     calls.push(options.cache)
     assert.ok(responses.length,'Asset retries must be bounded')
     return new Response(responses.shift())
