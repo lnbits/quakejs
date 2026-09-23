@@ -514,6 +514,118 @@ async def test_only_one_invoice_is_created_for_concurrent_clicks(arena, monkeypa
 
 
 @pytest.mark.anyio
+async def test_lnbits_payment_event_pushes_player_state_without_polling(
+    arena, monkeypatch
+):
+    from lnbits.extensions import quakejs
+    from lnbits.extensions.quakejs import lobby, views
+    from lnbits.task_manager import TaskManager
+
+    token = crud.uid()
+    entry = await crud.reserve_entry(
+        arena["id"], token, EntryInput(lnAddress="player@example.com", nonce=crud.uid())
+    )
+    sent = asyncio.Queue()
+
+    async def send_json(message):
+        await sent.put(message)
+
+    connection = views.Connection(
+        SimpleNamespace(send_json=send_json), arena["id"], token
+    )
+    monkeypatch.setattr(views.manager, "connections", {connection})
+    monkeypatch.setattr(lobby, "listeners", {})
+    monkeypatch.setattr(settings, "lnbits_running", True)
+    dispatcher = TaskManager()
+    dispatcher.tasks = []
+    listener = dispatcher.register_invoice_listener(quakejs.paid, "quakejs-test")
+    tasks = [
+        asyncio.create_task(connection.states()),
+        asyncio.create_task(connection.write()),
+    ]
+    try:
+        initial = await asyncio.wait_for(sent.get(), 2)
+        assert initial["data"]["player"] is None
+        dispatcher._invoice_dispatcher(
+            SimpleNamespace(
+                success=True,
+                is_in=True,
+                extra={"tag": "quakejs", "quakejs_entry": entry["id"]},
+                wallet_id="wallet",
+                amount=entry["amount"] * 1000,
+                payment_hash=crud.uid(),
+                bolt11="test-invoice",
+            )
+        )
+        # Neither reconcile_entries nor a native engine runs in this test.
+        # The 15-second state heartbeat cannot account for this pushed message.
+        received = await asyncio.wait_for(sent.get(), 2)
+        assert received["type"] == "state"
+        assert received["data"]["player"]["livesRemaining"] == 5
+        assert received["data"]["player"]["autoAdmit"] is True
+    finally:
+        dispatcher.cancel_task(listener)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(listener.task, *tasks, return_exceptions=True)
+
+
+@pytest.mark.anyio
+async def test_slow_entry_invoice_times_out_without_reissuing_and_can_recover(
+    arena, monkeypatch
+):
+    calls = []
+
+    async def slow_invoice(**kwargs):
+        calls.append(kwargs)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(payments, "ENTRY_INVOICE_TIMEOUT", 0.01)
+    monkeypatch.setattr(payments, "create_invoice", slow_invoice)
+    token = crud.uid()
+    data = EntryInput(lnAddress="player@example.com", nonce=crud.uid())
+    with pytest.raises(ValueError, match="pending. Retry"):
+        await asyncio.wait_for(payments.create_entry(arena["id"], token, data), 2)
+    for nonce in (data.nonce, crud.uid()):
+        with pytest.raises(ValueError, match="being prepared"):
+            await payments.create_entry(
+                arena["id"], token, EntryInput(lnAddress=data.ln_address, nonce=nonce)
+            )
+    assert len(calls) == 1
+    rows = await crud.all_rows("SELECT * FROM quakejs.entries")
+    assert len(rows) == 1 and rows[0]["status"] == "creating"
+    # Reconciliation can recover a core invoice created before the timeout.
+    recovered = SimpleNamespace(
+        success=False, is_in=True, payment_hash="recovered", bolt11="recovered-invoice"
+    )
+    await crud.record_invoice(rows[0]["id"], recovered)
+    invoice = await payments.create_entry(arena["id"], token, data)
+    assert invoice["paymentRequest"] == "recovered-invoice"
+    assert invoice["expiresAt"] == rows[0]["expires_at"]
+    assert len(calls) == 1
+    state = await crud.public_state(arena["id"], token)
+    assert state["entryNonce"] == data.nonce and "invoice" in state
+    assert "entryNonce" not in await crud.public_state(arena["id"])
+
+
+@pytest.mark.anyio
+async def test_expired_entry_does_not_return_an_unpayable_invoice(arena, monkeypatch):
+    async def invoice(**kwargs):
+        return SimpleNamespace(
+            success=False, is_in=True, payment_hash="expired", bolt11="old-invoice"
+        )
+
+    monkeypatch.setattr(payments, "create_invoice", invoice)
+    token = crud.uid()
+    data = EntryInput(lnAddress="player@example.com", nonce=crud.uid())
+    await payments.create_entry(arena["id"], token, data)
+    async with crud.transaction() as tx:
+        await tx.execute("UPDATE quakejs.entries SET expires_at=1")
+    with pytest.raises(ValueError, match="Invoice expired"):
+        await payments.create_entry(arena["id"], token, data)
+
+
+@pytest.mark.anyio
 async def test_journal_rejects_unknown_life_run_and_gaps(arena):
     token, _, _ = await paid(arena)
     life = await crud.allocate_life(arena["id"], token, arena["run_id"])

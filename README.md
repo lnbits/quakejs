@@ -68,6 +68,18 @@ VPS before increasing it. Empty servers stop after
 five minutes. A native process is limited to 512 MiB of address space and 64 file
 descriptors. Game assets are shared through the operating system's file cache.
 
+Browsers download the compressed game pack through `/quakejs/assets/arena.pk3`.
+The extension prevents additional gzip compression inside LNbits and serves the
+file in chunks, with ETags, range requests and a one-day public cache lifetime.
+The loader includes the pack's SHA-256 in the URL and verifies the downloaded
+bytes, so new asset versions use a different cache entry. Browser cache eviction
+can still require a fresh download. No Caddy override is needed for this endpoint.
+
+Entry invoices use LNbits' normal invoice service. Creation is bounded to 20
+seconds, with a 30-second browser request timeout; uncertain requests retain
+their reservation for reconciliation and reuse the same nonce on retry.
+Payment updates use the WebSocket without an additional blocking HTTP refresh.
+
 An authenticated arena owner can close a game even with players, unused lives or
 unexpired invoices. Closure removes it from the lobby, blocks admission and new
 invoices, and stops its engine on the next lease check (within about five seconds).

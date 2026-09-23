@@ -231,11 +231,20 @@ async def test_empty_game_expiration_preserves_lives_invoices_and_admin_games(
 ):
     setting, game = await public_arena(creatorHaircut=0, lnAddress="")
     clock = crud.now()
-    monkeypatch.setattr(crud, "now", lambda: clock + 601)
+    monkeypatch.setattr(crud, "now", lambda: clock)
+    clock += 599
+    assert not await lobby.expire_game(game["id"])
+    assert game["id"] in {
+        row["id"] for row in (await lobby.snapshot(setting["public_id"]))["games"]
+    }
+    clock += 1
     # Admin games never auto-expire.
     assert not await lobby.expire_game(arena["id"])
     assert await lobby.expire_game(game["id"])
     assert (await crud.public_state(game["id"]))["game"]["status"] == "closed"
+    assert game["id"] not in {
+        row["id"] for row in (await lobby.snapshot(setting["public_id"]))["games"]
+    }
     _, funded = await public_arena()
     token, _, _ = await paid(funded)
     clock += 601
@@ -256,6 +265,30 @@ async def test_empty_game_expiration_preserves_lives_invoices_and_admin_games(
     assert not await lobby.expire_game(pending["id"])
     clock += 301
     assert await lobby.expire_game(pending["id"])
+
+
+@pytest.mark.anyio
+async def test_maintenance_removes_expired_public_game_and_notifies_lobby(
+    arena, monkeypatch
+):
+    setting, game = await public_arena(creatorHaircut=0, lnAddress="")
+    clock = crud.now() + 600
+    monkeypatch.setattr(crud, "now", lambda: clock)
+    refreshed = asyncio.Event()
+    monkeypatch.setattr(lobby, "listeners", {"owner": {refreshed}})
+    task = asyncio.create_task(lobby.maintenance())
+    try:
+        await asyncio.wait_for(refreshed.wait(), 2)
+        result = await lobby.snapshot(setting["public_id"])
+        assert game["id"] not in {row["id"] for row in result["games"]}
+        assert arena["id"] in {row["id"] for row in result["games"]}
+        recorded = await crud.one(
+            "SELECT * FROM quakejs.arenas WHERE id=:id", id=game["id"]
+        )
+        assert recorded["active"] == 0 and recorded["lobby_hidden"] == 1
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.anyio

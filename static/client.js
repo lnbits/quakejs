@@ -5,10 +5,19 @@ window.createLNbitsExtensionClient = () => {
     const headers = {'Content-Type': 'application/json'}
     if (token) headers.Authorization = 'Bearer ' + token
     else if (wallets[0]) headers['X-Api-Key'] = wallets[0].adminkey
-    const response = await fetch('/quakejs/api/v1/' + path, {method, headers, body: data ? JSON.stringify(data) : undefined, cache:'no-store'})
-    const result = await response.json()
-    if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Request failed. Check the entered values.')
-    return result
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 30000)
+    try {
+      const response = await fetch('/quakejs/api/v1/' + path, {method, headers, body: data ? JSON.stringify(data) : undefined, cache:'no-store', signal:controller.signal})
+      const result = await response.json()
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Request failed. Check the entered values.')
+      return result
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error(method === 'POST' && path.endsWith('/entry')
+        ? 'The server is taking too long. Retry shortly; your invoice request has been kept.'
+        : 'The server is taking too long. Please retry shortly.')
+      throw error
+    } finally { clearTimeout(timer) }
   }
   return {
     getSessionValue: async key => ({value:localStorage.getItem(key) || ''}),

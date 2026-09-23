@@ -22,6 +22,7 @@ from . import crud
 from .models import PublicError
 
 PAYOUT_INVOICE_TIMEOUT = 15
+ENTRY_INVOICE_TIMEOUT = 20
 
 
 def invoice_error_detail(error):
@@ -71,15 +72,16 @@ async def create_entry(arena_id, token, data):
     entry = await crud.reserve_entry(arena_id, token, data)
     if entry.get("_new"):
         try:
-            payment = await create_invoice(
-                wallet_id=entry["wallet_id"],
-                amount=entry["amount"],
-                memo="QuakeJS: five lives",
-                expiry=300,
-                extension="quakejs",
-                extra={"tag": "quakejs", "quakejs_entry": entry["id"]},
-                external_id=entry["id"],
-            )
+            with fail_after(ENTRY_INVOICE_TIMEOUT):
+                payment = await create_invoice(
+                    wallet_id=entry["wallet_id"],
+                    amount=entry["amount"],
+                    memo="QuakeJS: five lives",
+                    expiry=300,
+                    extension="quakejs",
+                    extra={"tag": "quakejs", "quakejs_entry": entry["id"]},
+                    external_id=entry["id"],
+                )
             await crud.record_invoice(entry["id"], payment)
             await crud.settle_entry(payment)
         except Exception:
@@ -95,6 +97,8 @@ async def create_entry(arena_id, token, data):
         entry = await crud.one(
             "SELECT * FROM quakejs.entries WHERE id=:id", id=entry["id"]
         )
+    if entry["expires_at"] <= crud.now() and entry["status"] != "paid":
+        raise PublicError("Invoice expired. Create a new invoice for five lives.")
     if not entry.get("bolt11"):
         raise PublicError("Your invoice is being prepared. Please retry shortly.")
     # Invoice creation awaits a provider outside the arena lock. An owner may
@@ -108,6 +112,8 @@ async def create_entry(arena_id, token, data):
         "playerToken": token,
         "paymentHash": entry["payment_hash"],
         "paymentRequest": entry["bolt11"],
+        "expiresAt": entry["expires_at"],
+        "nonce": entry["nonce"],
     }
 
 

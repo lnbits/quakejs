@@ -9,7 +9,7 @@ window.QuakeAssets={
     throw failure
   },
   async download(progress,cache) {
-    const response=await fetch('/quakejs/static/arena/baseoa/arena.pk3?v='+this.manifest.sha256,{cache})
+    const response=await fetch('/quakejs/assets/arena.pk3?v='+this.manifest.sha256,{cache})
     if(!response.ok) throw new Error('Game assets could not be downloaded. Reload to retry.')
     const data=new Uint8Array(this.manifest.size), reader=response.body.getReader()
     let offset=0

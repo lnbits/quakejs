@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections import deque
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from anyio import fail_after
@@ -10,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from loguru import logger
 from starlette.responses import JSONResponse, Response
+from starlette.staticfiles import StaticFiles
 
 from lnbits.core.crud import get_wallets
 from lnbits.core.models import WalletTypeInfo
@@ -46,7 +48,7 @@ class SafePublicRoute(APIRoute):
         handler = super().get_route_handler()
         path = self.path.removeprefix("/quakejs")
         public = path.startswith(
-            ("/games/", "/lobby/", "/api/v1/public/", "/api/v1/lobby/")
+            ("/games/", "/lobby/", "/assets/", "/api/v1/public/", "/api/v1/lobby/")
         )
 
         async def guarded(request):
@@ -83,6 +85,9 @@ socket_slots = {}
 MAX_SOCKETS = 512
 MAX_SOCKETS_PER_IP = 32
 share_render_slots = asyncio.Semaphore(2)
+game_assets = StaticFiles(
+    directory=Path(__file__).parent / "static" / "arena", check_dir=False
+)
 
 
 def limit(key, maximum, period):
@@ -144,6 +149,25 @@ router.add_api_route(
     endpoint=lnbits_index,
     dependencies=[Depends(check_user_exists)],
 )
+
+
+@router.head("/assets/arena.pk3", include_in_schema=False)
+@router.get("/assets/arena.pk3", include_in_schema=False)
+async def game_pack(request: Request):
+    # A fixed file outside the core static mount lets the extension control its
+    # response headers. StaticFiles retains threaded I/O, ETags and range support.
+    response = await game_assets.get_response("baseoa/arena.pk3", request.scope)
+    response.headers.update(
+        {
+            # The PK3 is already compressed. An explicit encoding prevents the
+            # outer LNbits GZipMiddleware from recompressing it on the event loop.
+            "Content-Encoding": "identity",
+            "Content-Type": "application/octet-stream",
+            "Cache-Control": "public, max-age=86400, no-transform",
+            "X-Content-Type-Options": "nosniff",
+        }
+    )
+    return response
 
 
 @router.head("/games/{arena_id}", include_in_schema=False)
@@ -433,7 +457,9 @@ async def invoice(
         ):
             raise PublicError("The game server is at capacity. Try again later.")
         result = await create_entry(arena_id, token, data)
-        await manager.notify(arena_id)
+        # Unpaid invoices do not change lobby player counts. Wake player sockets
+        # directly; returning the invoice must not wait for a lobby DB lookup.
+        manager.notify_players(arena_id)
         return result
     except PublicError as error:
         raise HTTPException(409, str(error)) from None

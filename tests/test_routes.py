@@ -128,6 +128,7 @@ def test_incomplete_websocket_handshakes_reserve_capacity(
 
 @pytest.mark.anyio
 async def test_invoice_request_does_not_start_an_engine(monkeypatch):
+    import asyncio
     from unittest.mock import AsyncMock
 
     from lnbits.extensions.quakejs.models import EntryInput
@@ -135,10 +136,20 @@ async def test_invoice_request_does_not_start_an_engine(monkeypatch):
     token = crud.uid()
     start = AsyncMock(side_effect=AssertionError("Unpaid engine startup"))
     create = AsyncMock(return_value={"paymentRequest": "test-invoice"})
+    lobby_notify = AsyncMock(side_effect=AssertionError("Unpaid lobby lookup"))
+    player_dirty, other_dirty = asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr(
+        views.manager,
+        "connections",
+        [
+            SimpleNamespace(arena_id="arena", dirty=player_dirty),
+            SimpleNamespace(arena_id="other", dirty=other_dirty),
+        ],
+    )
     monkeypatch.setattr(views.manager, "ensure", start)
     monkeypatch.setattr(views.manager, "check_available", lambda _: None)
     monkeypatch.setattr(views.manager, "matches", {})
-    monkeypatch.setattr(views.manager, "notify", AsyncMock())
+    monkeypatch.setattr(views.manager, "notify", lobby_notify)
     monkeypatch.setattr(views, "create_entry", create)
     result = await views.invoice(
         SimpleNamespace(client=SimpleNamespace(host="invoice-test")),
@@ -149,6 +160,8 @@ async def test_invoice_request_does_not_start_an_engine(monkeypatch):
     assert result["paymentRequest"] == "test-invoice"
     start.assert_not_awaited()
     create.assert_awaited_once()
+    lobby_notify.assert_not_awaited()
+    assert player_dirty.is_set() and not other_dirty.is_set()
 
 
 @pytest.mark.parametrize("token", [None, 48, ["a"] * 48, {}, "a" * 47, "z" * 48])

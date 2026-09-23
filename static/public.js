@@ -25,7 +25,7 @@ function showEntry() {
   $('invoice').hidden = true
   $('create-new-game').hidden = !arena.lobbyUrl
   $('resume').hidden = true
-  $('join-button').disabled = !!arena.engineFailed || arena.player?.status === 'settling'
+  $('join-button').disabled = arena.joining || !!arena.engineFailed || arena.player?.status === 'settling'
   $('join-button').textContent = canRespawn() ? `Respawn · ${arena.player.livesRemaining} lives left` : 'Pay for 5 lives'
   $('address').hidden = canRespawn()
   $('address-label').hidden = canRespawn()
@@ -45,6 +45,11 @@ function feed(message) {
 function sessionKey(name) { return `quakejs.${arena.gameId}.${name}` }
 async function remember(name, value) { await client.setSessionValue(sessionKey(name), String(value)) }
 async function recall(name) { return (await client.getSessionValue(sessionKey(name)))?.value || '' }
+function retireInvoiceNonce(nonce) {
+  if (!nonce || arena.invoiceNonce !== nonce) return
+  arena.invoiceNonce = ''
+  remember('invoice-nonce', '').catch(() => {})
+}
 function command(text) {
   if (!arena.module?._Cbuf_AddText) return
   const pointer = arena.module.stringToNewUTF8(text + '\n')
@@ -157,6 +162,11 @@ function showInvoice(invoice) {
     showEntry()
     return
   }
+  if (arena.player?.livesRemaining > 0 || arena.player?.status === 'alive') return
+  if (invoice.nonce && arena.invoiceNonce !== invoice.nonce) {
+    arena.invoiceNonce = invoice.nonce
+    remember('invoice-nonce', invoice.nonce).catch(() => {})
+  }
   $('create-new-game').hidden = true
   clearTimeout(arena.invoiceTimer)
   if(invoice.expiresAt) arena.invoiceTimer=setTimeout(()=>{
@@ -200,6 +210,7 @@ function applyState(response) {
     }
     return
   }
+  if (response.player) retireInvoiceNonce(response.entryNonce)
   if (arena.player?.status==='alive') {
     $('join-form').hidden=true; $('invoice').hidden=true
     lobbyLink.hidden=!response.lobbyUrl
@@ -214,12 +225,15 @@ function applyState(response) {
       arena.enginePlayerId=''
       command('disconnect')
     }
+    if (arena.joining && !canRespawn()) return
     showEntry()
     status(canRespawn()?'Your next life is ready. Click Respawn; no payment is needed.':'No lives left. Pay for another five lives.')
-  } else if (response.invoice) showInvoice(response.invoice)
-  else if (response.invoiceExpired) {
+  } else if (response.invoice) {
+    if (!arena.joining || !arena.invoiceNonce || response.entryNonce === arena.invoiceNonce) showInvoice(response.invoice)
+  }
+  else if (response.invoiceExpired && !arena.joining && (!arena.invoiceNonce || response.entryNonce === arena.invoiceNonce)) {
     showEntry();status('Invoice expired. Create a new invoice for five lives.')
-    remember('invoice-nonce','').catch(()=>{})
+    retireInvoiceNonce(response.entryNonce)
   }
   if (arena.player?.status==='alive') arena.admitting=false
 }
@@ -235,17 +249,22 @@ async function join(event) {
       return
     }
     const lnAddress=$('address').value.trim()
+    status('Creating invoice…')
     await client.setSessionValue('quakejs.address',lnAddress)
-    let nonce=await recall('invoice-nonce')
-    // Reuse a nonce after uncertain invoice creation; rotate only after funded lives were exhausted.
-    if(!nonce || (arena.player && !arena.player.livesRemaining)) {
-      nonce=randomToken();await remember('invoice-nonce',nonce)
+    let nonce=arena.invoiceNonce
+    // Retire only the specific request confirmed paid or expired by the server.
+    if(!nonce) {
+      nonce=randomToken();arena.invoiceNonce=nonce;await remember('invoice-nonce',nonce)
     }
     const invoice=await client.createEntry(arena.gameId,arena.playerToken,{lnAddress,name:lnAddress.split('@')[0].slice(0,18)||'PLAYER',nonce})
     arena.entryMode='payment'
     showInvoice(invoice)
-    await refresh()
-  } catch(error) { status(error.message||'Could not join the arena.');$('overlay').hidden=false }
+    try { wakeRefresh() } catch (_) { refresh().catch(() => {}) }
+  } catch(error) {
+    if ($('invoice').hidden && !arena.player?.livesRemaining && arena.player?.status !== 'alive') {
+      status(error.message||'Could not join the arena.');$('overlay').hidden=false
+    }
+  }
   finally { arena.joining=false;$('join-button').disabled=!!arena.engineFailed }
 }
 
@@ -280,6 +299,7 @@ async function init() {
   if(!arena.gameId) throw new Error('Arena id is missing.')
   arena.playerToken=await recall('native-player')
   if(!arena.playerToken) { arena.playerToken=randomToken();await remember('native-player',arena.playerToken) }
+  arena.invoiceNonce=await recall('invoice-nonce')
   $('address').value=(await client.getSessionValue('quakejs.address'))?.value||''
   await refresh()
   if (arena.game?.status === 'closed') {

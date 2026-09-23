@@ -444,10 +444,13 @@ class Manager:
                 ) from None
             return match
 
-    async def notify(self, arena_id):
+    def notify_players(self, arena_id):
         for connection in list(self.connections):
             if connection.arena_id == arena_id:
                 connection.dirty.set()
+
+    async def notify(self, arena_id):
+        self.notify_players(arena_id)
         from . import lobby
 
         if lobby.listeners:

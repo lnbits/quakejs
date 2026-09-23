@@ -560,6 +560,9 @@ async def public_state(arena_id, token=""):
             for status in ("queued", "prepared", "sending", "pending")
         )
         result["failedWinnings"] = amounts.get("failed", 0)
+        # Only returned for the authenticated player session. The browser uses
+        # this to retire the matching request, not a newer invoice in flight.
+        result["entryNonce"] = entry["nonce"] if entry else ""
         if not entry or entry["status"] != "paid":
             if entry and entry["expires_at"] <= now():
                 result["invoiceExpired"] = True
@@ -568,6 +571,7 @@ async def public_state(arena_id, token=""):
                     "paymentHash": entry["payment_hash"],
                     "paymentRequest": entry["bolt11"],
                     "expiresAt": entry["expires_at"],
+                    "nonce": entry["nonce"],
                 }
             return result
         state = "dead" if not balance["n"] else "left"
