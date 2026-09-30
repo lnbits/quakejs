@@ -58,6 +58,9 @@
             <p id="role" class="fine"></p>
             <p id="status" role="status" aria-live="polite"></p>
             <button id="resume" type="button" hidden>Enter arena</button>
+            <button id="leave-button" type="button" hidden>Leave with sats</button>
+            <p id="refund-status" class="fine" role="status" aria-live="polite" hidden></p>
+            <button id="join-again" type="button" hidden>Join again with a new paid entry</button>
             <p id="control-help" class="controls">WASD move · Mouse aim · Click fire · Space jump · 1–9 weapons · Esc release mouse</p>
             <p class="fine">The dedicated server referees the match. Each payment buys five lives. Dying, disconnecting or reloading uses the current life; unused lives stay saved. Pay again when all five are used.</p>
       <details class="credits"><summary>Quake III / ioquake3 · OpenArena · Credits, licenses and source</summary>
@@ -69,6 +72,13 @@
             <p class="fine"><a id="create-new-game" hidden>Go to lobby/create new game</a></p>
           </div>
         </div>
+        <dialog id="leave-dialog" aria-labelledby="leave-title">
+          <h2 id="leave-title">Leave with sats?</h2>
+          <p id="leave-terms"></p>
+          <p>Leaving permanently removes all your remaining lives in this player session. A kill recorded before you leave can reduce the final refund. Payment is sent in the background; if your Lightning address cannot receive it, contact the arena owner.</p>
+          <button id="confirm-leave" type="button">Leave and refund my lives</button>
+          <button id="cancel-leave" type="button">Keep playing</button>
+        </dialog>
       <aside><ol id="roster" aria-label="Players"></ol><ol id="feed" aria-label="Arena activity" aria-live="polite"></ol></aside>
       <footer id="powered-by">POWERED BY LNBITS</footer>
       </section>

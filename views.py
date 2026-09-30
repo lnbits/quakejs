@@ -19,6 +19,7 @@ from lnbits.helpers import template_renderer
 from lnbits.settings import settings as lnbits_settings
 
 from . import crud, lobby
+from .leaving import request_leave
 from .models import (
     MAPS,
     ArenaInput,
@@ -383,7 +384,9 @@ async def payouts(arena_id: str, key: WalletTypeInfo = Depends(require_admin_key
             "(SELECT id,'kill' AS kind,amount,status,error,payment_hash,"
             "created_at,arena_id FROM quakejs.payouts "
             "UNION ALL SELECT id,'creator' AS kind,amount,status,error,"
-            "payment_hash,created_at,arena_id FROM quakejs.creator_payouts) "
+            "payment_hash,created_at,arena_id FROM quakejs.creator_payouts "
+            "UNION ALL SELECT id,'refund' AS kind,amount,status,error,"
+            "payment_hash,created_at,arena_id FROM quakejs.refund_payouts) "
             "AS transfers "
             "WHERE arena_id=:id ORDER BY created_at DESC LIMIT "
             "100",
@@ -442,6 +445,27 @@ async def invoice(
     except Exception:
         raise HTTPException(
             503, "Entry preparation is temporarily unavailable. Retry shortly."
+        ) from None
+
+
+@router.post("/api/v1/public/{arena_id}/leave")
+async def leave_game(
+    request: Request, arena_id: str, authorization: str | None = Header(default=None)
+):
+    token = session(authorization)
+    try:
+        limit(("leave", request.client.host if request.client else ""), 12, 60)
+        manager.check_available(arena_id)
+        player = await finish_on_cancel(request_leave(arena_id, token))
+        await finish_on_cancel(manager.finish_leave(player))
+        return await crud.public_state(arena_id, token)
+    except PublicError as error:
+        raise HTTPException(409, str(error)) from None
+    except Exception:
+        raise HTTPException(
+            503,
+            "Leaving needs reconciliation. Check your refund status or retry; "
+            "do not pay again.",
         ) from None
 
 

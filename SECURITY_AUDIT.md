@@ -330,3 +330,31 @@ browser or live Lightning provider. The existing three template API deprecation
 warnings remain. Changed files for this pass: `payments.py`, `crud.py`,
 `static/public.js`, its corresponding-source bundle, `tests/test_ledger.py`,
 `tests/test_lobby.py`, `tests/test_public_ui.mjs`, `Makefile`, and this review.
+
+## Voluntary leave refunds (2026-09-29)
+
+The authenticated player token requests retirement; the browser cannot choose
+refund amounts, entries, recipients, wallets or life counts. A persisted leaving
+marker blocks fresh invoices and admissions for that session. Leave and detach
+share the match lock. Native revoke command 3 acknowledges removal without a
+forfeiture, then all journal batches are applied before the arena transaction
+zeros remaining paid balances, marks living/resumable lives refunded, creates
+unique per-entry refund outbox rows and marks the session left. A frag before the
+barrier consumes its funded life before the refund calculation. A failed barrier
+stops the engine; incomplete journal recovery blocks refunds rather than guessing.
+
+A separate recovery worker resumes interrupted requests. Delayed incoming
+payments cannot resurrect retired sessions and queue refunds to their original
+entry addresses. Refund payments share invoice-claim uniqueness with kill and
+creator payouts; outgoing identity includes the refund kind. Uncertain sends
+retain exact-hash reconciliation, with no automatic resend or restoration of
+refunded lives. Refunds do not enter kill winnings or leaderboard totals.
+
+Regression tests cover concurrent leave requests, allocation rejection, full
+transaction rollback, late/duplicate incoming payments, partial refunds and fee
+rounding, real native revocation and disconnect races, unreplayed kills, missing
+barrier acknowledgements, stale-run recovery, failed LNURL preparation and
+ambiguous sends. Public API tests check player isolation and error redaction;
+browser tests check confirmation, duplicate clicks, delayed state/invoice events
+and retries. These tests use temporary SQLite databases and synthetic payments;
+they do not verify a live Lightning provider or the deployed VPS.

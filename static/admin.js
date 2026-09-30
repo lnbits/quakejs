@@ -40,7 +40,7 @@ window.PageQuakejs = {
           field: 'kind',
           align: 'left',
           format: value =>
-            value === 'creator' ? 'Creator fee' : 'Kill winnings'
+            value === 'creator' ? 'Creator fee' : value === 'refund' ? 'Leave refund' : 'Kill winnings'
         },
         {name: 'amount', label: 'Sats', field: 'amount', align: 'right'},
         {name: 'status', label: 'Status', field: 'status', align: 'left'},

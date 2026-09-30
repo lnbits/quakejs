@@ -36,6 +36,7 @@ def quakejs_start():
         asyncio.create_task(job)
         for job in (
             manager.loop(),
+            manager.leave_loop(),
             payout_loop(manager.notify),
             reconcile_entries(manager.notify),
             maintenance(),

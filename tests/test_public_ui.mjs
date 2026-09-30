@@ -87,10 +87,10 @@ test('closure between page load and initial state prevents assets and sockets st
   assert.equal(element('loading').textContent, 'Arena closed')
 })
 
-function invoiceUI(createEntry) {
+function invoiceUI(createEntry, extraClient = {}) {
   const elements = new Map(), stored = new Map(), messages = []
   const element = id => {
-    if (!elements.has(id)) elements.set(id, {hidden: false, value: '', addEventListener() {}})
+    if (!elements.has(id)) elements.set(id, {hidden: false, value: '', addEventListener() {}, showModal() { this.open = true }, close() { this.open = false }})
     return elements.get(id)
   }
   element('address').value = 'player@example.com'
@@ -102,7 +102,8 @@ function invoiceUI(createEntry) {
         getSessionValue: async key => ({value: stored.get(key)}),
         setSessionValue: async (key, value) => stored.set(key, value),
         createEntry,
-        getPublicGame: async () => { throw new Error('Unexpected HTTP refresh') }
+        getPublicGame: async () => { throw new Error('Unexpected HTTP refresh') },
+        ...extraClient
       }),
       QUAKEJS_QR_DATA_URI: value => 'qr:' + value,
       addEventListener() {}
@@ -218,3 +219,55 @@ for (const phase of ['fetch', 'body']) {
     assert.equal(cleared, true)
   })
 }
+
+test('leave button shows only with remaining lives and opens refund confirmation', () => {
+  const {context, element} = invoiceUI()
+  vm.runInContext(`
+    applyState({game: arena.game, player: {status: 'dead', livesRemaining: 4}, refund: {estimate: 76}})
+    showLeave()
+  `, context)
+  assert.equal(element('leave-button').hidden, false)
+  assert.equal(element('leave-dialog').open, true)
+  assert.match(element('leave-terms').textContent, /76 sats for 4 remaining lives/)
+  vm.runInContext('applyState({game: arena.game, player: {status: "dead", livesRemaining: 0}})', context)
+  assert.equal(element('leave-button').hidden, true)
+})
+
+test('duplicate leave clicks and stale state cannot re-admit a refunded player', async () => {
+  let complete, requests = 0
+  const pending = new Promise(resolve => { complete = resolve })
+  const {context, element, messages} = invoiceUI(undefined, {leaveGame: () => { requests++; return pending }})
+  vm.runInContext(`
+    applyState({game: arena.game, player: {status: 'alive', livesRemaining: 5, id: 'life', name: 'Player'}})
+  `, context)
+  const attempt = vm.runInContext('confirmLeave()', context)
+  await vm.runInContext('confirmLeave()', context)
+  vm.runInContext(`
+    applyState({game: arena.game, player: {status: 'left', livesRemaining: 5, autoAdmit: true}})
+    showInvoice({paymentRequest: 'late-invoice'})
+  `, context)
+  assert.equal(requests, 1)
+  assert.equal(messages.length, 0)
+  assert.equal(element('invoice').hidden, true)
+  assert.equal(element('resume').hidden, true)
+  complete(vm.runInContext(`({game: arena.game, leaveState: 'left', player: {status: 'left', livesRemaining: 0}, refund: {pending: 95}})`, context))
+  await attempt
+  vm.runInContext(`applyState({game: arena.game, player: {status: 'alive', livesRemaining: 5, autoAdmit: true}})`, context)
+  assert.equal(vm.runInContext('arena.player.livesRemaining', context), 0)
+  assert.equal(element('leave-button').hidden, true)
+  assert.equal(element('join-again').hidden, false)
+  assert.match(element('refund-status').textContent, /Pending: 95 sats/)
+  assert.equal(messages.length, 0)
+})
+
+test('lost leave response keeps gameplay disabled and permits a safe retry', async () => {
+  let requests = 0
+  const {context, element} = invoiceUI(undefined, {leaveGame: async () => { requests++; throw new Error('network') }})
+  vm.runInContext("arena.player = {status: 'alive', livesRemaining: 5}", context)
+  await vm.runInContext('confirmLeave()', context)
+  assert.equal(vm.runInContext('arena.leaving', context), true)
+  assert.equal(element('resume').hidden, true)
+  assert.equal(element('leave-button').disabled, false)
+  await vm.runInContext('confirmLeave()', context)
+  assert.equal(requests, 2)
+})

@@ -73,6 +73,27 @@ seconds, with a 30-second browser request timeout; uncertain requests retain
 their reservation for reconciliation and reuse the same nonce on retry.
 Payment updates use the WebSocket without an additional blocking HTTP refresh.
 
+Players with remaining lives can use **Leave with sats** in the game dialog
+(Esc on desktop, Menu on touch devices). Confirmation permanently retires that
+player session and refunds every remaining paid life, including the current life
+if it survives until engine revocation. The refund for each entry is
+`floor(remaining × entry sats × (100 − admin fee − creator fee) / 500)`.
+The creator receives their percentage of that remaining value; the admin fee and
+rounding remainder stay in the arena wallet. Each refund uses the Lightning address
+saved on its original entry. A recorded kill before revocation reduces the refund.
+Kill winnings are separate and refunds never count toward the scoreboard.
+
+Leave requests survive restarts. The engine must acknowledge revocation and its
+durable journal must be drained before remaining balances are zeroed and refund
+payments are queued in one transaction. The same retired session cannot buy or
+use more lives, and late entry payments are refunded instead of reviving it.
+**Join again with a new paid entry** explicitly starts a fresh player session.
+The dialog shows pending, paid and failed refund totals. Refunds use the existing
+durable payout worker; an uncertain send is reconciled, never automatically
+resent. Failed Lightning addresses require owner review and do not restore lives.
+Admin **Payouts** includes leave refunds. Migration 12 adds the retirement marker
+and refund outbox without changing existing paid entries or kill payouts.
+
 An authenticated arena owner can close a game even with players, unused lives or
 unexpired invoices. Closure removes it from the lobby, blocks admission and new
 invoices, and stops its engine on the next lease check (within about five seconds).

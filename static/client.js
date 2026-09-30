@@ -24,6 +24,7 @@ window.createLNbitsExtensionClient = () => {
     setSessionValue: async (key,value) => localStorage.setItem(key,value),
     getPublicGame: (id,token) => request('public/' + id,'GET',undefined,token),
     createEntry: (id,token,data) => request('public/' + id + '/entry','POST',data,token),
+    leaveGame: (id,token) => request('public/' + id + '/leave','POST',undefined,token),
     listWallets: async () => ({wallets}),
     getSettings: () => request('settings'),
     saveSettings: data => request('settings','PUT',data),

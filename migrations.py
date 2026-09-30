@@ -182,3 +182,40 @@ async def m011_admin_arena_closure(db):
     await db.execute(
         "ALTER TABLE quakejs.arenas ADD COLUMN admin_closed INTEGER NOT NULL DEFAULT 0"
     )
+
+
+async def m012_leave_refunds(db):
+    # DDL is committed per statement by LNbits; an interrupted upgrade can resume.
+    if db.type == "SQLITE":
+        columns = await db.fetchall("PRAGMA quakejs.table_info(participants)")
+        names = {row["name"] for row in columns}
+    else:
+        columns = await db.fetchall(
+            "SELECT column_name FROM information_schema.columns WHERE "
+            "table_schema='quakejs' AND table_name='participants'"
+        )
+        names = {row["column_name"] for row in columns}
+    if "leave_state" not in names:
+        await db.execute(
+            "ALTER TABLE quakejs.participants ADD COLUMN "
+            "leave_state TEXT NOT NULL DEFAULT ''"
+        )
+    await db.execute("""CREATE TABLE IF NOT EXISTS quakejs.refund_payouts (
+        id TEXT PRIMARY KEY, arena_id TEXT NOT NULL, victim_id TEXT NOT NULL UNIQUE,
+        killer_id TEXT NOT NULL DEFAULT '', player_id TEXT NOT NULL,
+        wallet_id TEXT NOT NULL, ln_address TEXT NOT NULL,
+        amount INTEGER NOT NULL CHECK(amount >= 0),
+        status TEXT NOT NULL, bolt11 TEXT, payment_hash TEXT UNIQUE,
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt BIGINT NOT NULL DEFAULT 0,
+        claimed_until BIGINT NOT NULL DEFAULT 0, claim TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+    )""")
+    for name, table, columns in (
+        ("refund_work_idx", "refund_payouts", "status, next_attempt"),
+        ("refund_player_idx", "refund_payouts", "player_id"),
+        ("leave_work_idx", "participants", "leave_state, id"),
+    ):
+        target = table if db.type == "SQLITE" else "quakejs." + table
+        index = "quakejs." + name if db.type == "SQLITE" else name
+        await db.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {target} ({columns})")

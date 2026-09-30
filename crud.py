@@ -171,6 +171,10 @@ async def reserve_entry(arena_id, token, data):
             raise PublicError("This arena is not accepting new entries.")
         player = await participant(tx, arena_id, token)
         if player:
+            if player["leave_state"]:
+                raise PublicError(
+                    "You have left this game. Start a new player session to rejoin."
+                )
             existing = await tx.one(
                 "SELECT * FROM quakejs.entries WHERE player_id=:id AND nonce=:nonce",
                 id=player["id"],
@@ -269,7 +273,7 @@ async def settle_entry(payment):
         entry = await tx.one("SELECT * FROM quakejs.entries WHERE id=:id", id=entry_id)
         if not entry:
             return None
-        await tx.lock_arena(entry["arena_id"], active=False)
+        arena = await tx.lock_arena(entry["arena_id"], active=False)
         entry = await tx.one("SELECT * FROM quakejs.entries WHERE id=:id", id=entry_id)
         # Only the core payment record supplies wallet, amount and settlement.
         if (
@@ -291,6 +295,19 @@ async def settle_entry(payment):
             hash=payment.payment_hash,
             invoice=payment.bolt11,
         )
+        player = await tx.one(
+            "SELECT * FROM quakejs.participants WHERE id=:id", id=entry["player_id"]
+        )
+        if player["leave_state"]:
+            # A delayed payment must never resurrect a retired player session.
+            # A leaving session waits for its engine barrier; a completed leave
+            # can safely refund this newly paid entry in the settlement transaction.
+            if player["leave_state"] == "left":
+                from .leaving import refund_entry
+
+                entry.update(status="paid", remaining=5)
+                await refund_entry(tx, entry, arena)
+            return entry["arena_id"]
         # Late payments can restore automatically expired arenas, but cannot
         # undo an explicit admin closure. Keep the paid entry for owner review.
         await tx.execute(
@@ -420,6 +437,10 @@ async def allocate_life(arena_id, token, run_id):
         player = await participant(tx, arena_id, token)
         if not player:
             raise PublicError("A paid entry is required.")
+        if player["leave_state"]:
+            raise PublicError(
+                "You are leaving this game; these lives cannot be used again."
+            )
         current = await tx.one(
             "SELECT * FROM quakejs.lives WHERE player_id=:id AND status IN "
             "('alive','left') ORDER BY created_at DESC LIMIT 1",
@@ -532,6 +553,10 @@ async def public_state(arena_id, token=""):
         player = await participant(tx, arena_id, token) if token else None
         if not player:
             return result
+        from .leaving import refund_state
+
+        result["leaveState"] = player["leave_state"]
+        result["refund"] = await refund_state(tx, player, arena)
         entry = await tx.one(
             "SELECT * FROM quakejs.entries WHERE player_id=:id ORDER BY "
             "CASE WHEN status='paid' AND remaining>0 THEN 0 ELSE 1 END, "
@@ -579,6 +604,8 @@ async def public_state(arena_id, token=""):
             state = "alive"
         elif life and life["status"] == "dead":
             state = "dead"
+        if player["leave_state"]:
+            state = player["leave_state"]
         result["player"] = {
             "id": life["id"] if life else player["id"],
             "name": player["name"],
@@ -588,6 +615,7 @@ async def public_state(arena_id, token=""):
             "paidAmount": entry["amount"] / 5,
             "slot": life["slot"] if life else 0,
             "autoAdmit": bool(arena["active"])
+            and not player["leave_state"]
             and balance["n"] > 0
             and (not life or (life["entry_id"] != entry["id"])),
             "payoutStatus": "",

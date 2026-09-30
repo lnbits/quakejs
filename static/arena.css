@@ -25,6 +25,12 @@ progress { width: 100%; height: 5px; accent-color: #ffad45; }
 #invoice img { max-width: 220px; width: 100%; margin-top: 14px; background: #fff; padding: 8px; }
 #invoice-text { display: block; resize: none; max-width: 100%; background: #080d14; color: #dce4ed; border: 1px solid #516277; font-size: 11px; overflow-wrap: anywhere; }
 #status { color: #71d5e5; overflow-wrap: anywhere; }
+#leave-button { background: #9ce76c; color: #102008; border: 2px solid #c0f99c; }
+#leave-button:hover { background: #b7f48c; }
+#refund-status { color: #b7f48c; }
+#leave-dialog { width: min(520px, calc(100% - 32px)); max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; padding: 24px; color: #dce4ed; background: #111923; border: 1px solid #9ce76c; }
+#leave-dialog::backdrop { background: #080d15dc; }
+#cancel-leave { background: #344354; color: white; }
 .controls { padding-top: 10px; border-top: 1px solid #344354; font-size: 12px; }
 .controls, .fine, .credits { color: #9aabbe; }
 .fine { font-size: 11px; }

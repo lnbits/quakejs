@@ -61,7 +61,7 @@ function randomToken() { return [...crypto.getRandomValues(new Uint8Array(24))].
 function stopPaymentWatch() {}
 function wakeRefresh() { arena.transport?.sendJSON({type:'refresh'}) }
 async function syncMatch() {
-  if (!arena.module || arena.player?.status !== 'alive') return
+  if (!arena.module || arena.player?.status !== 'alive' || arena.leaving || arena.left) return
   if (arena.enginePlayerId === arena.player.id) return
   arena.enginePlayerId=arena.player.id
   arena.engineReadyPlayerId=''
@@ -158,6 +158,7 @@ function engineStopped() {
 }
 
 function showInvoice(invoice) {
+  if (arena.leaving || arena.left) return
   if (arena.game?.status === 'closed') {
     showEntry()
     return
@@ -182,6 +183,7 @@ function showInvoice(invoice) {
   status('Waiting for payment…')
 }
 function applyState(response) {
+  if (arena.left && response.leaveState !== 'left') return
   const previous=arena.player
   arena.game=response.game; arena.player=response.player
   $('arena-name').textContent=arena.game.name
@@ -197,6 +199,29 @@ function applyState(response) {
   $('tally').textContent=`Won: ${response.won||0} sats`
   if(response.pendingWinnings) $('tally').textContent+=` · Pending: ${response.pendingWinnings} sats`
   $('role').textContent='Dedicated arena server'
+  arena.refund = response.refund
+  $('leave-button').hidden = !(arena.player?.livesRemaining > 0) && !arena.leaving
+  if (response.leaveState || arena.leaving) {
+    arena.leaving = true
+    arena.left = response.leaveState === 'left'
+    arena.admitting = false
+    document.exitPointerLock?.()
+    arena.touchControls?.release()
+    $('overlay').hidden = false
+    $('join-form').hidden = true
+    $('invoice').hidden = true
+    $('resume').hidden = true
+    $('leave-button').hidden = !!arena.left
+    $('leave-button').textContent = 'Check leave / refund'
+    $('leave-button').disabled = !!arena.leaveBusy
+    $('refund-status').hidden = false
+    const refund = response.refund || {}
+    $('refund-status').textContent = `Refund paid: ${refund.paid || 0} sats · Pending: ${refund.pending || 0} sats` + (refund.failed ? ` · Needs owner review: ${refund.failed} sats. Your lives remain retired.` : '')
+    status(arena.left ? 'You have left. All your remaining lives have been retired. Refunds to your saved Lightning address are processed in the background.' : 'Leaving… Your request is being checked. Do not pay again; you can safely retry.')
+    $('join-again').hidden = !arena.left
+    if (arena.left) { arena.enginePlayerId = ''; command('disconnect') }
+    return
+  }
   if (arena.game.status === 'closed') {
     document.exitPointerLock?.()
     arena.enginePlayerId=''
@@ -239,7 +264,7 @@ function applyState(response) {
 }
 async function join(event) {
   event.preventDefault()
-  if(arena.joining || arena.engineFailed || !arena.module || arena.game?.status === 'closed') return
+  if(arena.joining || arena.leaving || arena.left || arena.engineFailed || !arena.module || arena.game?.status === 'closed') return
   arena.joining=true; $('join-button').disabled=true
   try {
     if(canRespawn()) {
@@ -266,6 +291,38 @@ async function join(event) {
     }
   }
   finally { arena.joining=false;$('join-button').disabled=!!arena.engineFailed }
+}
+
+function showLeave() {
+  if (arena.leaving) { confirmLeave(); return }
+  if (!arena.player?.livesRemaining || arena.leaveBusy) return
+  document.exitPointerLock?.()
+  arena.touchControls?.release()
+  const refund = arena.refund || {}
+  $('leave-terms').textContent = `Refund estimate: ${refund.estimate || 0} sats for ${arena.player.livesRemaining} remaining lives, after haircuts, to your saved Lightning address. This includes your current life if it is still alive when you leave.`
+  $('leave-dialog').showModal()
+}
+
+async function confirmLeave() {
+  if (arena.leaveBusy || arena.left) return
+  $('leave-dialog').close()
+  arena.leaveBusy = true
+  arena.leaving = true
+  arena.admitting = false
+  $('leave-button').disabled = true
+  $('join-button').disabled = true
+  $('resume').hidden = true
+  status('Leaving… Securing your remaining lives for refund.')
+  try {
+    applyState(await client.leaveGame(arena.gameId, arena.playerToken))
+  } catch (_) {
+    status('Leave confirmation is pending. Retry safely; do not pay again.')
+    try { await refresh() } catch (_) {}
+  } finally {
+    arena.leaveBusy = false
+    $('leave-button').disabled = false
+    $('leave-button').textContent = 'Check leave / refund'
+  }
 }
 
 async function init() {
@@ -302,6 +359,11 @@ async function init() {
   arena.invoiceNonce=await recall('invoice-nonce')
   $('address').value=(await client.getSessionValue('quakejs.address'))?.value||''
   await refresh()
+  if (arena.leaving || arena.left) {
+    $('loading').hidden = true; $('progress').hidden = true
+    arena.transport = new window.QuakeTransport(arena.gameId, arena.playerToken, applyState, message => status(message))
+    return
+  }
   if (arena.game?.status === 'closed') {
     $('loading').textContent = 'Arena closed'
     $('progress').hidden = true
@@ -317,7 +379,7 @@ async function init() {
     $('progress').value = Math.round(value * 100)
     $('loading').textContent = `Loading OpenArena · ${Math.round(value * 100)}%`
   })
-  if (arena.game?.status === 'closed') return
+  if (arena.game?.status === 'closed' || arena.leaving || arena.left) return
   $('loading').textContent = 'Starting OpenArena…'
   arena.module = await window.QuakeArena(engineOptions({isHost: false}))
   if (arena.engineFailed) throw new Error('OpenArena could not start on this browser. No entry payment is required.')
@@ -341,9 +403,21 @@ document.addEventListener('fullscreenchange', () => {
 })
 $('join-form').addEventListener('submit', join)
 $('join-button').addEventListener('click', join)
+$('leave-button').addEventListener('click', showLeave)
+$('confirm-leave').addEventListener('click', confirmLeave)
+$('cancel-leave').addEventListener('click', () => $('leave-dialog').close())
+$('join-again').addEventListener('click', async () => {
+  if (!arena.left) return
+  $('join-again').disabled = true
+  try {
+    await remember('invoice-nonce', '')
+    await remember('native-player', randomToken())
+    window.location.reload()
+  } catch (_) { $('join-again').disabled = false; status('Could not start a new session. Retry shortly.') }
+})
 $('address').addEventListener('keydown', event => { if (event.key === 'Enter') join(event) })
 $('resume').addEventListener('click', () => {
-  if (arena.player?.status !== 'alive') return
+  if (arena.player?.status !== 'alive' || arena.leaving || arena.left) return
   arena.entryMode = ''
   status(entryStatus(true))
   $('overlay').hidden = true

@@ -293,7 +293,13 @@ class Match:
                 if not self.closed:
                     # The engine journals the forfeiture before acknowledging it.
                     # Its consumed guard makes a simultaneous frag spend only once.
-                    await self.control(bytes([7, life["slot"]]))
+                    player = await crud.one(
+                        "SELECT leave_state FROM quakejs.participants WHERE id=:id",
+                        id=life["player_id"],
+                    )
+                    await self.control(
+                        bytes([3 if player["leave_state"] else 7, life["slot"]])
+                    )
                 await self.replay()
                 self.peers.pop(life["slot"], None)
                 connection.life = None
@@ -448,6 +454,100 @@ class Manager:
         for connection in list(self.connections):
             if connection.arena_id == arena_id:
                 connection.dirty.set()
+
+    async def finish_leave(self, player):
+        from .leaving import finish_leave
+
+        arena_id = player["arena_id"]
+        self.check_available(arena_id)
+        async with self.lock:
+            match = self.matches.get(arena_id)
+            if match and match.closed:
+                await match.stop()
+                self.matches.pop(arena_id, None)
+                match = None
+            if match:
+                try:
+                    async with match.lock:
+                        # Admissions share this lock. The durable leaving flag
+                        # blocks any queued admission before it can create a life.
+                        lives = await crud.all_rows(
+                            "SELECT * FROM quakejs.lives WHERE player_id=:id "
+                            "AND status='alive' AND run_id=:run",
+                            id=player["id"],
+                            run=match.run,
+                        )
+                        for life in lives:
+                            # Revoke without forfeiting. ACK follows revocation,
+                            # so all preceding deaths are already in the journal.
+                            await match.control(bytes([3, life["slot"]]))
+                            peer = match.peers.pop(life["slot"], None)
+                            if peer:
+                                peer.life = None
+                        await match.drain_journal()
+                        await finish_leave(player["id"], revoked_run=match.run)
+                        match.last_used = crud.now()
+                except Exception:
+                    # A failed barrier must not leave an authorized character.
+                    # Recovery must succeed before any refund can be queued.
+                    await match.stop()
+                    self.matches.pop(arena_id, None)
+                    raise
+            else:
+                arena = await crud.one(
+                    "SELECT * FROM quakejs.arenas WHERE id=:id", id=arena_id
+                )
+                runs = await crud.all_rows(
+                    "SELECT DISTINCT r.* FROM quakejs.runs r JOIN quakejs.lives l "
+                    "ON l.run_id=r.id WHERE l.player_id=:id AND r.status='running'",
+                    id=player["id"],
+                )
+                if runs and arena["lease_until"] > crud.now():
+                    raise PublicError(
+                        "Your game is recovering. The leave request is saved."
+                    )
+                for run in runs:
+                    recovered = Match(self, arena, run["id"])
+                    await recovered.drain_journal()
+                    async with crud.transaction() as tx:
+                        await tx.lock_arena(arena_id, active=False)
+                        await tx.execute(
+                            "UPDATE quakejs.lives SET status='left',connected_until=0 "
+                            "WHERE run_id=:run AND status='alive'",
+                            run=run["id"],
+                        )
+                        await tx.execute(
+                            "UPDATE quakejs.runs SET status='recovered' WHERE id=:id",
+                            id=run["id"],
+                        )
+                await finish_leave(player["id"])
+        await self.notify(arena_id)
+
+    async def recover_leaves(self):
+        rows = await crud.all_rows(
+            "SELECT * FROM quakejs.participants WHERE leave_state='leaving' "
+            "AND id>:cursor ORDER BY id LIMIT 10",
+            cursor=getattr(self, "leave_cursor", ""),
+        )
+        self.leave_cursor = rows[-1]["id"] if rows else ""
+        for player in rows:
+            try:
+                await self.finish_leave(player)
+            except Exception:  # noqa: S112 - retry durable requests without log spam
+                # Persisted requests remain visible in the player's refund status.
+                # The next sweep retries; never undo retirement or guess a refund.
+                continue
+
+    async def leave_loop(self):
+        while True:
+            try:
+                if self.running:
+                    await self.recover_leaves()
+            except Exception:
+                # A database outage must not stop the recovery worker.
+                await asyncio.sleep(5)
+                continue
+            await asyncio.sleep(5)
 
     async def notify(self, arena_id):
         self.notify_players(arena_id)

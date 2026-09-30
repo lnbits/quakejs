@@ -108,6 +108,12 @@ async def create_entry(arena_id, token, data):
     )
     if not arena or not arena["active"]:
         raise PublicError("This arena has been closed. Do not pay its invoice.")
+    player = await crud.one(
+        "SELECT leave_state FROM quakejs.participants WHERE id=:id",
+        id=entry["player_id"],
+    )
+    if player["leave_state"]:
+        raise PublicError("You have left this game. Do not pay its invoice.")
     return {
         "playerToken": token,
         "paymentHash": entry["payment_hash"],
@@ -119,9 +125,17 @@ async def create_entry(arena_id, token, data):
 
 def outbox_table(row):
     table = row.get("_table", "payouts")
-    if table not in ("payouts", "creator_payouts"):
+    if table not in ("payouts", "creator_payouts", "refund_payouts"):
         raise ValueError("Invalid payout kind.")
     return table
+
+
+def payout_kind(row):
+    return {
+        "payouts": "kill",
+        "creator_payouts": "creator",
+        "refund_payouts": "refund",
+    }[outbox_table(row)]
 
 
 async def claim_payout():
@@ -135,6 +149,10 @@ async def claim_payout():
             "AND next_attempt<=:now AND claimed_until<=:now "
             "UNION ALL SELECT id,created_at,next_attempt,'creator_payouts' AS "
             "kind FROM quakejs.creator_payouts WHERE "
+            "status IN ('queued','prepared','sending','pending') "
+            "AND next_attempt<=:now AND claimed_until<=:now "
+            "UNION ALL SELECT id,created_at,next_attempt,'refund_payouts' AS "
+            "kind FROM quakejs.refund_payouts WHERE "
             "status IN ('queued','prepared','sending','pending') "
             "AND next_attempt<=:now AND claimed_until<=:now"
             ") AS ready ORDER BY next_attempt,created_at,id LIMIT 1",
@@ -242,20 +260,18 @@ async def process_payout(row):
                 wallet_id=row["wallet_id"],
                 payment_request=row["bolt11"],
                 max_sat=row["amount"],
-                description=(
-                    "QuakeJS creator fee"
-                    if outbox_table(row) == "creator_payouts"
-                    else "QuakeJS frag payout"
-                ),
+                description={
+                    "kill": "QuakeJS frag payout",
+                    "creator": "QuakeJS creator fee",
+                    "refund": "QuakeJS unused lives refund",
+                }[payout_kind(row)],
                 tag="quakejs",
                 external_id=row["id"],
                 extra={
                     "tag": "quakejs",
                     "quakejs_payout": row["id"],
                     "quakejs_victim": row["victim_id"],
-                    "quakejs_kind": (
-                        "creator" if outbox_table(row) == "creator_payouts" else "kill"
-                    ),
+                    "quakejs_kind": payout_kind(row),
                 },
             )
             if not matches_payout(payment, row):
@@ -286,8 +302,8 @@ def matches_payout(payment, row):
     return (
         payment.is_out
         and (
-            outbox_table(row) != "creator_payouts"
-            or payment.extra.get("quakejs_kind") == "creator"
+            payout_kind(row) == "kill"
+            or payment.extra.get("quakejs_kind") == payout_kind(row)
         )
         and payment.wallet_id == row["wallet_id"]
         and payment.payment_hash == row["payment_hash"]
